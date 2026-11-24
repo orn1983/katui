@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -16,6 +17,89 @@ import (
 )
 
 const connectionFileLimit = 1 << 20
+
+type connectionProfile struct {
+	Brokers        []string        `json:"brokers"`
+	ClientConfig   string          `json:"client_config,omitempty"`
+	CommandConfig  string          `json:"command_config,omitempty"`
+	Security       *securityConfig `json:"security,omitempty"`
+	PromptPassword bool            `json:"prompt_password,omitempty"`
+}
+
+var errProfilePassword = errors.New("this cluster needs a password; open the interactive setup or supply --client-config")
+
+func connectionProfilesPath(backend string) string {
+	filename := "connections.json"
+	if backend == "cli" {
+		filename = "cli-connections.json"
+	}
+	return defaultPath("XDG_CONFIG_HOME", ".config", filename)
+}
+
+func loadConnectionProfiles(backend string) (map[string]connectionProfile, error) {
+	data, err := readLimited(connectionProfilesPath(backend), connectionFileLimit)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]connectionProfile{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var profiles map[string]connectionProfile
+	if err := json.Unmarshal(data, &profiles); err != nil {
+		return nil, fmt.Errorf("saved clusters: %w", err)
+	}
+	if profiles == nil {
+		return nil, errors.New("saved clusters must be a JSON object")
+	}
+	return profiles, nil
+}
+
+func saveConnectionProfiles(backend string, profiles map[string]connectionProfile) error {
+	data, err := json.MarshalIndent(profiles, "", "  ")
+	if err != nil {
+		return err
+	}
+	if len(data) > connectionFileLimit {
+		return errors.New("saved clusters exceed the file size limit")
+	}
+	return atomicFile(connectionProfilesPath(backend), data)
+}
+
+func (o *options) selectConnection(p connectionProfile) error {
+	if o.backend != "cli" && o.config == "" && p.PromptPassword {
+		return errProfilePassword
+	}
+	if err := o.setBrokers(strings.Join(p.Brokers, ",")); err != nil {
+		return err
+	}
+	if o.backend == "cli" {
+		if o.commandConfig == "" {
+			o.commandConfig = p.CommandConfig
+		}
+	} else if o.config == "" {
+		o.config, o.security = p.ClientConfig, p.Security
+	}
+	o.setCachePolicy()
+	return nil
+}
+
+func (o options) connectionProfile(rememberPassword bool) connectionProfile {
+	p := connectionProfile{Brokers: o.brokers, ClientConfig: o.config, CommandConfig: o.commandConfig}
+	if o.security != nil {
+		saved := *o.security
+		if saved.SASL.Mechanism != "" && !rememberPassword {
+			p.PromptPassword = true
+			saved.SASL.Password = ""
+		}
+		p.Security = &saved
+	}
+	return p
+}
+
+func (o *options) setCachePolicy() {
+	// Cache files do not record the identity used to obtain the snapshot.
+	o.noCache = o.noCacheFlag || o.config != "" || o.security != nil || o.sizeConfig != "" || o.commandConfig != ""
+}
 
 type securityConfig struct {
 	TLS        bool   `json:"tls"`
@@ -94,12 +178,16 @@ func (o options) kafkaOptions(path string) ([]kgo.Opt, error) {
 		kgo.RequestRetries(0),
 		kgo.RequestTimeoutOverhead(o.timeout),
 	}
-	if path == "" {
-		return opts, nil
+	c := o.security
+	if path != "" {
+		var err error
+		c, err = loadSecurityConfig(path)
+		if err != nil {
+			return nil, err
+		}
 	}
-	c, err := loadSecurityConfig(path)
-	if err != nil {
-		return nil, err
+	if c == nil {
+		return opts, nil
 	}
 	t, err := c.tlsConfig()
 	if err != nil {

@@ -1,6 +1,7 @@
 package katui
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -58,8 +59,57 @@ func TestCachePolicy(t *testing.T) {
 		if o.noCache != tt.noCache {
 			t.Errorf("%v: noCache = %v, want %v", tt.args, o.noCache, tt.noCache)
 		}
-		if len(o.brokers) != 1 || o.brokers[0] != "localhost:9092" {
-			t.Errorf("%v: default brokers = %v", tt.args, o.brokers)
+		if len(o.brokers) != 0 {
+			t.Errorf("%v: unexpected implicit brokers %v", tt.args, o.brokers)
 		}
+	}
+}
+
+func TestSavedClusterCredentials(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	options, err := arguments([]string{"-b", "b.example.net:9093,a.example.net:9093"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.security = &securityConfig{TLS: true}
+	options.security.SASL.Mechanism = "SCRAM-SHA-256"
+	options.security.SASL.Username = "test-user"
+	options.security.SASL.Password = "fixture-password"
+	profiles := map[string]connectionProfile{
+		"ask":        options.connectionProfile(false),
+		"remembered": options.connectionProfile(true),
+	}
+	if err := saveConnectionProfiles("api", profiles); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := loadConnectionProfiles("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pass := saved["ask"].Security.SASL.Password; pass != "" || !saved["ask"].PromptPassword {
+		t.Fatal("a session-only password was saved")
+	}
+	if pass := saved["remembered"].Security.SASL.Password; pass != options.security.SASL.Password {
+		t.Fatal("the opted-in password was not saved")
+	}
+	fresh, err := arguments(nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fresh.selectConnection(saved["ask"]); !errors.Is(err, errProfilePassword) {
+		t.Fatalf("password prompt error = %v", err)
+	}
+	if err := fresh.selectConnection(saved["remembered"]); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.cluster != "a.example.net:9093,b.example.net:9093" || !fresh.noCache {
+		t.Fatalf("profile did not preserve inspector key or authenticated cache policy: %q, %t", fresh.cluster, fresh.noCache)
+	}
+	otherBackend, err := loadConnectionProfiles("cli")
+	if err != nil || len(otherBackend) != 0 {
+		t.Fatal("API profiles leaked into CLI profiles")
+	}
+	if err := run(t.Context(), []string{"--once", "--cluster", "ask"}); !errors.Is(err, errProfilePassword) {
+		t.Fatalf("noninteractive lookup = %v", err)
 	}
 }

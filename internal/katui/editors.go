@@ -160,11 +160,11 @@ func (p *payloadPane) protoEditor(topic string) {
 	path.SetChangedFunc(func(string) { invalidate(); d.say("Load the current schema and import folders") })
 	folders.SetChangedFunc(func() { invalidate(); d.say("Load the current schema and import folders") })
 	browse := func() {
-		u.fileBrowser(path.GetText(), false, func(name string) { path.SetText(name); focusForm(u, form, 0) })
+		u.fileBrowser(filePicker{initial: path.GetText(), title: "Choose schema file", accept: schemaExtension, preview: true}, func(name string) { path.SetText(name); focusForm(u, form, 0) })
 	}
 	addFolder := func() {
 		initial := filepath.Dir(expandHome(path.GetText()))
-		u.fileBrowser(initial, true, func(name string) {
+		u.fileBrowser(filePicker{initial: initial, title: "Choose import folder"}, func(name string) {
 			f := lines(folders.GetText())
 			if !containsString(f, name) {
 				f = append(f, name)
@@ -284,17 +284,21 @@ func containsString(list []string, s string) bool {
 	}
 	return false
 }
-func (u *ui) fileBrowser(initial string, folderMode bool, pick func(string)) {
+
+type filePicker struct {
+	initial, title string
+	accept         func(string) bool // nil selects folders
+	preview        bool
+}
+
+func (u *ui) fileBrowser(picker filePicker, pick func(string)) {
+	folderMode := picker.accept == nil
 	path := tview.NewInputField().SetLabel("Path [Alt+P] ")
 	filter := tview.NewInputField().SetLabel("Filter [Alt+F] ")
 	table := tview.NewTable().SetFixed(1, 0).SetSelectable(true, false)
 	preview := tview.NewTextView().SetScrollable(true)
 	body := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(path, 1, 0, false).AddItem(filter, 1, 0, false).AddItem(table, 0, 1, true).AddItem(preview, 2, 0, false)
-	title := "Choose schema file"
-	if folderMode {
-		title = "Choose import folder"
-	}
-	d := u.dialog(title, body, table)
+	d := u.dialog(picker.title, body, table)
 	d.focusables = []tview.Primitive{path, filter, table, preview}
 	var here string
 	var entries, visible []fileEntry
@@ -353,7 +357,7 @@ func (u *ui) fileBrowser(initial string, folderMode bool, pick func(string)) {
 				if e != nil {
 					err = e
 				} else if !info.IsDir() {
-					if folderMode || !schemaExtension(absolute) {
+					if folderMode || !info.Mode().IsRegular() || !picker.accept(absolute) {
 						err = fmt.Errorf("unsupported target %s", absolute)
 					} else {
 						selectFile = filepath.Base(absolute)
@@ -380,7 +384,7 @@ func (u *ui) fileBrowser(initial string, folderMode bool, pick func(string)) {
 							if entry.Type()&os.ModeSymlink != 0 {
 								data, e = os.Stat(filepath.Join(absolute, entry.Name()))
 							}
-							if e != nil || !data.IsDir() && (folderMode || !data.Mode().IsRegular() || !schemaExtension(entry.Name())) {
+							if e != nil || !data.IsDir() && (folderMode || !data.Mode().IsRegular() || !picker.accept(entry.Name())) {
 								continue
 							}
 							items = append(items, fileEntry{entry.Name(), filepath.Join(absolute, entry.Name()), data.IsDir(), data.Size(), data.ModTime()})
@@ -448,7 +452,7 @@ func (u *ui) fileBrowser(initial string, folderMode bool, pick func(string)) {
 		selectionGeneration++
 		sequence := selectionGeneration
 		preview.SetText(safe(entry.path, false))
-		if entry.path == "" || entry.directory || !strings.EqualFold(filepath.Ext(entry.path), ".proto") {
+		if !picker.preview || entry.path == "" || entry.directory || !strings.EqualFold(filepath.Ext(entry.path), ".proto") {
 			return
 		}
 		go func() {
@@ -525,5 +529,5 @@ func (u *ui) fileBrowser(initial string, folderMode bool, pick func(string)) {
 		}
 		return true
 	})
-	browse(initial)
+	browse(picker.initial)
 }

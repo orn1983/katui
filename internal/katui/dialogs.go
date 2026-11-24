@@ -75,6 +75,14 @@ func (d *dialog) keymap(handle func(*tcell.EventKey) bool) {
 			if dd, ok := d.u.app.GetFocus().(*tview.DropDown); ok && dd.IsOpen() {
 				return event
 			}
+			if form, ok := d.body.(*tview.Form); ok {
+				for i := range form.GetFormItemCount() {
+					// An open dropdown transfers focus to its internal list.
+					if dd, ok := form.GetFormItem(i).(*tview.DropDown); ok && dd.IsOpen() {
+						return event
+					}
+				}
+			}
 			d.cancel()
 			return nil
 		}
@@ -198,7 +206,8 @@ Tab / Shift+Tab Move focus
 Arrows / j / k  Navigate
 PageUp / Down   Page
 Enter           Open the selected row
-Esc             Back / close
+Esc             Back / close, or cancel a pending connection
+4               Kafka clusters
 /               Search; Enter returns to results
 s / r           Sort / refresh
 z               Fullscreen / restore
@@ -230,6 +239,7 @@ func (u *ui) palette() {
 	add("Consumer Groups", '2', func() { u.changeWorkspace(1) })
 	add("Messages", '3', func() { u.changeWorkspace(2) })
 	add("Refresh monitoring", 'r', u.requestRefresh)
+	add("Kafka clusters", '4', u.clustersDialog)
 	add("Change color theme", 't', u.theme)
 	add("Help", '?', u.help)
 	add("Quit", 'q', u.quit)

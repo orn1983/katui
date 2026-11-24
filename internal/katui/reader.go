@@ -1,6 +1,7 @@
 package katui
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -59,18 +60,43 @@ type storedRecord struct {
 	store                        *payloadStore
 }
 
-func (r *storedRecord) full() ([]byte, error) {
+func (r *storedRecord) fullAvailable() bool {
+	return !r.truncated() || r.fullPath != ""
+}
+
+func (r *storedRecord) openFull() (io.ReadCloser, error) {
+	if !r.fullAvailable() {
+		return nil, errPayloadQuota
+	}
 	if r.fullPath == "" {
-		if r.truncated() {
-			return nil, errPayloadQuota
-		}
+		return io.NopCloser(bytes.NewReader(r.value)), nil
+	}
+	file, err := os.Open(r.fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("original unavailable: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil || info.Size() != int64(r.valueSize) {
+		file.Close()
+		return nil, errors.New("retained payload is incomplete")
+	}
+	return file, nil
+}
+
+func (r *storedRecord) full() ([]byte, error) {
+	if !r.truncated() && r.fullPath == "" {
 		return r.value, nil
 	}
-	bytes, err := os.ReadFile(r.fullPath)
+	file, err := r.openFull()
 	if err != nil {
-		return nil, fmt.Errorf("original unavailable; reconsume the record: %w", err)
+		return nil, err
 	}
-	return bytes, nil
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, int64(r.valueSize)+1))
+	if err == nil && len(data) != r.valueSize {
+		err = errors.New("retained payload is incomplete")
+	}
+	return data, err
 }
 
 func (r *storedRecord) truncated() bool { return r.valueSize > len(r.value) }
@@ -371,7 +397,11 @@ func (u *ui) beginReader(topic string, opts consumeOptions) error {
 		if err != nil {
 			return err
 		}
-		u.store = newPayloadStore(dir, payloadQuota)
+		limit := int64(payloadQuota)
+		if u.b.payloadStorageSet {
+			limit = u.b.payloadStorage
+		}
+		u.store = newPayloadStore(dir, limit)
 	}
 	u.stopReader()
 	u.resetMessages()

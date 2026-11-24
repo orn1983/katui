@@ -57,7 +57,7 @@ func TestConfigDurationExact(t *testing.T) {
 }
 
 func TestCSVAndFullTree(t *testing.T) {
-	d, warnings, err := parseCSV("id;値;empty\n1;\"a\nb\";\n2;b\n", profile{delimiter: ";", header: true}, false, 200)
+	d, warnings, err := parseCSV(context.Background(), "id;値;empty\n1;\"a\nb\";\n2;b\n", profile{delimiter: ";", header: true}, false, 200, maxRenderedPayload)
 	if err != nil || len(warnings) != 0 {
 		t.Fatalf("CSV warnings=%v err=%v", warnings, err)
 	}
@@ -69,7 +69,7 @@ func TestCSVAndFullTree(t *testing.T) {
 	}
 	values := make([]any, 10101)
 	values[len(values)-1] = "needle"
-	tree, _ := buildTree("root", values, true)
+	tree, _ := buildTree(context.Background(), "root", values, true)
 	var verify func(*payloadNode) bool
 	verify = func(n *payloadNode) bool {
 		if len(n.children) > 100 {

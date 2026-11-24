@@ -207,7 +207,7 @@ Arrows / j / k  Navigate
 PageUp / Down   Page
 Enter           Open the selected row
 Esc             Back / close, or cancel a pending connection
-4               Kafka clusters
+4               Kafka cluster management
 /               Search; Enter returns to results
 s / r           Sort / refresh
 z               Fullscreen / restore
@@ -222,8 +222,10 @@ Messages       b Records · i Inspector · m Mode · F4 Full payload
                p Pause · x Stop · l Clear rolling buffer · f Follow latest
                Space Check · a Check matching · w Compare · e Uncheck all
                o CSV columns · u Protobuf · d Delimiter · h Header
-               y Copy whole value · v Copy view
-Full payload   / Search · n Next match · p Previous match
+               y Copy Value · v Copy View · E Export
+Payload text   Drag or Shift+arrows Select · Ctrl+A Select all · Ctrl+C Copy
+Full payload   / Search · n Next match · p Previous match · L Load full
+               Esc cancels an active load
 
 Offsets are positions. Retained counts and rates are estimates.
 Read-only inspection does not join an application consumer group.`)

@@ -63,13 +63,21 @@ The CLI backend supports consumer-group monitoring. The executable can also be o
 
 ## Use
 
-- `1`, `2`, and `3` switch workspaces. `/` searches, Enter opens or returns focus to results, and Esc goes back. `?` shows shortcuts and Ctrl+P opens application commands.
+- `1` opens Topics, `2` opens Consumer Groups, and `3` opens Messages. Press `4` to open Kafka cluster management, add or edit connection profiles, and switch clusters. `/` searches, Enter opens or returns focus to results, and Esc goes back. `?` shows shortcuts and Ctrl+P opens application commands.
 - In a topic or partition, `c` opens the reader form. Choose partitions, a start position, and whether to continue following new records. Alt+G starts the reader.
-- In Messages, `i` focuses the inspector, `b` returns to records, and `m` changes payload format. Space checks the selected record and `w` compares checked records. F4 opens complete retained payloads. In Full view, `/` searches and `n` and `p` move between matches. Full view renders up to 8 MiB, with a 2 MiB input limit for structured formats and up to 10,000 search matches.
+- In Messages, `i` focuses the inspector, `b` returns to records, and `m` changes payload format. Space checks the selected record and `w` compares checked records. F4 opens Full view.
 - The record reader uses partition fetches without group membership or offset commits. Kafka offsets are positions, so retained-count and rate displays are estimates.
 - Topic administration is under `a`, `n`, and `d`. Group administration is under `a`. Review displays the proposed effect. Type the exact target name and use Alt+A or the Apply button. Kafka writes make one request after revalidation. A timeout or partial response may have changed state and requires a fresh review.
-- Preferences live under `$XDG_CONFIG_HOME/katui/inspectors.json`, or `~/.config/katui/inspectors.json`. A preference file can be selected with `--inspector-config`. Local monitoring snapshots are disabled by `--no-cache` and whenever a connection configuration file is supplied. Large retained values use up to 128 MiB of temporary disk space per Katui instance. After that, the reader keeps previews and marks complete payloads that could not be stored. Temporary files are cleaned up on normal exit.
-- Copy actions request clipboard transfer through the terminal. The terminal or multiplexer must support clipboard requests. The app reports the request without claiming delivery.
+- Preferences live under `$XDG_CONFIG_HOME/katui/inspectors.json`, or `~/.config/katui/inspectors.json`. Use `--inspector-config` to select a preferences file. Local monitoring snapshots are disabled by `--no-cache` and whenever a connection configuration file is supplied.
+
+### Inspect, copy, and export payloads
+
+- Full view defaults to 2 MiB of structured input and 8 MiB of rendered text. Set `--structured-input-mib` and `--rendered-output-mib` to choose limits from 1 to 128 MiB. For a specific Full view, press `L` and confirm **Load** to raise both limits to 128 MiB for JSON, CSV, Protobuf, or raw text. The render runs in the background. Esc cancels and keeps the Full view open. Some decoder calls finish in the background after cancellation.
+- Press `/` to search the loaded text or tree and `n` or `p` to move through matches. Full view keeps at most 10,000 matches and one million text lines. CSV displays at most 50,000 rows and 256 columns. Trees display at most 50,000 nodes and 128 levels per record. The view reports when a limit is reached.
+- Messages shows temporary storage usage and marks each record **Complete** or **Preview only**. Set `--payload-storage-mib` to change the default 128 MiB quota per instance. `0` disables temporary storage while keeping inline values and previews. A warning appears when a value cannot fit. Katui cleans up temporary payloads on normal exit.
+- Drag or hold Shift while using the arrow keys to select text, Ctrl+A to select all displayed text, and Ctrl+C to copy the selection. In a tree, use Tab or click to focus the selected node’s detail pane. The inspector, checked-record comparison, and Full view all support selection.
+- `y` copies the complete retained text value and `v` copies the rendered view. An incomplete full-value copy or rendered-view copy reports an error. `E` exports a complete retained value byte for byte, including binary values. Comparison export lets you choose a record. Enter a new path on the machine running Katui.
+- Local macOS uses `pbcopy` when available. SSH and the fallback use terminal clipboard transfer (OSC 52), which requires terminal or multiplexer support and has a 64 KiB limit in Katui. Use Export for larger copies over SSH or binary payloads.
 
 ## Verification
 
@@ -79,12 +87,10 @@ go vet ./...
 govulncheck ./...
 ```
 
-The Kafka integration test is opt-in. Use a disposable cluster and credentials with permissions to create, configure, produce to, and delete temporary topics and manage temporary test groups.
+The default suite covers large payloads, temporary storage, clipboard paths, changed administration reviews, partial replies, timeouts, and snapshot recovery after reconnecting. The Kafka integration test is opt-in. Use a disposable cluster and credentials with permissions to create, configure, produce to, and delete temporary topics and manage temporary test groups.
 
 ```sh
 KATUI_TEST_BROKER=localhost:9092 go test -race ./...
 ```
 
 The test checks validate-only topic creation, finite filtered reading with a retained large payload, unchanged group commits after reading, timestamp reset with a missing-timestamp fallback, rejection of a stale reset review, staged configuration, classic group rebalance, and topic and group deletion.
-
-The implementation uses a keyboard-first terminal layout. The topic-to-group picker occupies the browser pane and retains its location on Back. Copy Value uses the complete retained value. It does not implement a separate mouse text-selection model.

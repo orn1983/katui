@@ -9,6 +9,7 @@ require (
 	github.com/rivo/uniseg v0.4.7
 	github.com/twmb/franz-go v1.22.3
 	github.com/twmb/franz-go/pkg/kadm v1.20.0
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20261124064352-f8ed4fc8185e
 	github.com/twmb/franz-go/pkg/kmsg v1.15.1
 	golang.org/x/term v0.40.0
 	google.golang.org/protobuf v1.36.11

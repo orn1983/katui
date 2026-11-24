@@ -2,6 +2,7 @@ package katui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -16,7 +17,10 @@ type payloadPane struct {
 	u                                        *ui
 	root, bar, content                       *tview.Flex
 	dialog                                   *dialog
-	metadata, status, viewer, nodeView       *tview.TextView
+	metadata, status                         *tview.TextView
+	viewer, nodeView                         *payloadText
+	document                                 payloadDocument
+	expanded                                 bool
 	mode                                     *tview.DropDown
 	search                                   *tview.InputField
 	tree                                     *tview.TreeView
@@ -25,7 +29,7 @@ type payloadPane struct {
 	full, comparison, metadataTab            bool
 	modeName, profileTopic                   string
 	result                                   payloadResult
-	renderCancel, searchCancel               context.CancelFunc
+	renderCancel, searchCancel, nodeCancel   context.CancelFunc
 	revision, searchRevision, nodeRevision   uint64
 	textMatches                              [][]int
 	treeMatches                              []*payloadNode
@@ -44,8 +48,8 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	p.content = tview.NewFlex().SetDirection(tview.FlexRow)
 	p.metadata = tview.NewTextView().SetTextColor(tcell.ColorSilver).SetScrollable(true).SetWrap(false)
 	p.status = tview.NewTextView().SetTextColor(tcell.ColorLightGoldenrodYellow)
-	p.viewer = tview.NewTextView().SetScrollable(true).SetWrap(false).SetDynamicColors(true)
-	p.nodeView = tview.NewTextView().SetScrollable(true).SetWrap(false)
+	p.viewer = newPayloadText(p.copyText)
+	p.nodeView = newPayloadText(p.copyText)
 	p.tree = tview.NewTreeView()
 	p.mode = tview.NewDropDown().SetLabel("Mode m  ")
 	p.mode.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
@@ -64,9 +68,7 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 			p.focusViewer()
 		}
 	})
-	for _, v := range []*tview.TextView{p.viewer, p.nodeView, p.metadata} {
-		v.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey { return u.viewerKeys(ev, nil, v) })
-	}
+	p.metadata.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey { return u.viewerKeys(ev, nil, p.metadata) })
 	p.tree.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
 		current := p.tree.GetCurrentNode()
 		if current != nil {
@@ -268,6 +270,10 @@ func (p *payloadPane) cancelRender() {
 		p.searchCancel()
 		p.searchCancel = nil
 	}
+	if p.nodeCancel != nil {
+		p.nodeCancel()
+		p.nodeCancel = nil
+	}
 	if p.renderCancel != nil {
 		p.renderCancel()
 		p.renderCancel = nil
@@ -280,9 +286,16 @@ func (p *payloadPane) refresh() {
 	p.treeMatches = nil
 	p.match = -1
 	p.status.SetText("")
-	p.viewer.SetText("").ScrollToBeginning()
-	p.nodeView.SetText("").ScrollToBeginning()
+	if p.dialog != nil {
+		p.dialog.say("")
+	}
+	p.document = payloadDocument{}
+	p.viewer.setDocument(payloadDocument{})
+	p.nodeView.setDocument(payloadDocument{})
 	p.layout()
+	if p.dialog != nil && (p.tree.HasFocus() || p.nodeView.HasFocus()) {
+		p.focusViewer()
+	}
 	if p.metadataTab {
 		p.showMetadata(true)
 	}
@@ -299,29 +312,40 @@ func (p *payloadPane) refresh() {
 		preferences[topic] = p.u.profile(topic)
 	}
 	mode := p.modeName
+	limits := p.u.b.inspectionLimits(p.expanded)
+	release := p.u.holdPayloads(records)
 	p.rendering = true
-	p.status.SetText("Preparing payload…")
+	p.status.SetText("Preparing payload… Esc cancels in Full view.")
 	go func() {
-		result := p.u.preparePayload(ctx, records, preferences, mode, p.full, len(records) > 1 || p.comparison)
-		if ctx.Err() != nil {
-			return
+		defer cancel()
+		result := p.u.preparePayload(ctx, records, preferences, mode, p.full, len(records) > 1 || p.comparison, limits)
+		doc, capped := indexPayloadText(ctx, result.text)
+		if capped {
+			result.incomplete = true
+			result.warning += "\nDisplay limited to 1,000,000 lines. Export for the original."
 		}
+		result.text = doc.text
 		p.u.post(func() {
-			if p.revision != revision {
+			release()
+			if p.revision != revision || ctx.Err() != nil {
 				return
 			}
 			p.rendering = false
 			p.result = result
+			p.document = doc
 			notice := safe(strings.ReplaceAll(result.warning, "\n", " · "), false)
+			if p.full && result.canExpand && !p.expanded {
+				notice = "L Load full · " + notice
+			}
 			if notice == "" && p.dialog == nil {
-				notice = "y Copy value  v Copy view  F4 Full"
+				notice = "Drag or Shift+arrows selects · y Value · v View · E Export · F4 Full"
 			}
 			p.status.SetText(notice)
 			if p.dialog != nil && result.warning != "" {
 				p.dialog.say(result.warning)
 			}
 			if !p.metadataTab {
-				p.setTextMatch(nil)
+				p.viewer.setDocument(doc)
 				if result.tree != nil {
 					root := p.addNode(result.tree)
 					p.tree.SetRoot(root).SetCurrentNode(root)
@@ -329,6 +353,9 @@ func (p *payloadPane) refresh() {
 					p.showNode(result.tree)
 				}
 				p.layout()
+				if result.tree != nil && p.viewer.HasFocus() || result.tree == nil && (p.tree.HasFocus() || p.nodeView.HasFocus()) {
+					p.focusViewer()
+				}
 			}
 			if p.dialog != nil {
 				p.dialog.focusables = p.focusables()
@@ -366,26 +393,45 @@ func (p *payloadPane) materialize(node *payloadNode) {
 }
 func (p *payloadPane) showNode(n *payloadNode) {
 	p.materialize(n)
+	if p.nodeCancel != nil {
+		p.nodeCancel()
+	}
 	p.nodeRevision++
 	generation := p.nodeRevision
-	if n.value == nil && n.parent == nil && len(n.children) > 0 {
-		p.nodeView.SetText(p.result.text)
+	if n.parent == nil && (!p.result.incomplete || n.value == nil && len(n.children) > 0) {
+		p.nodeView.setDocument(p.document)
 		return
 	}
-	ctx := p.u.ctx
+	p.nodeView.setDocument(payloadDocument{})
+	ctx, cancel := context.WithCancel(p.u.ctx)
+	p.nodeCancel = cancel
+	limit := p.u.b.inspectionLimits(p.expanded).rendered
 	go func() {
-		text := safe(prettyValue(n.value), true)
-		if ctx.Err() != nil {
-			return
+		defer cancel()
+		raw, err := json.Marshal(n.value)
+		var text string
+		if err == nil {
+			text, err = prettyJSON(ctx, raw, limit)
 		}
+		if err != nil {
+			text = "Node cannot be formatted within the display limits. Select a smaller branch."
+		}
+		out := renderText{limit: limit}
+		out.writeSafe(ctx, text)
+		doc, linesLimited := indexPayloadText(ctx, out.String())
 		p.u.post(func() {
-			if p.nodeRevision == generation {
-				p.nodeView.SetText(text).ScrollToBeginning()
+			if p.nodeRevision == generation && ctx.Err() == nil {
+				p.nodeView.setDocument(doc)
+				if linesLimited || out.limited {
+					p.notice("Node text reached the display limit. Select a smaller branch.")
+				}
 			}
 		})
 	}()
 }
+
 func (p *payloadPane) showMetadata(on bool) {
+	hadFocus := p.viewer.HasFocus() || p.tree.HasFocus() || p.nodeView.HasFocus()
 	p.metadataTab = on
 	if on {
 		var out strings.Builder
@@ -393,28 +439,57 @@ func (p *payloadPane) showMetadata(on bool) {
 			out.WriteString(metadataText(r))
 			out.WriteString("\n\n")
 		}
-		p.viewer.SetText(tview.Escape(out.String()))
+		doc, _ := indexPayloadText(p.u.ctx, out.String())
+		p.viewer.setDocument(doc)
 	} else {
-		p.setTextMatch(nil)
+		p.viewer.setDocument(p.document)
 	}
-	p.viewer.ScrollToBeginning()
 	p.layout()
+	if hadFocus {
+		p.focusViewer()
+	}
 }
+
 func (p *payloadPane) setTextMatch(match []int) {
-	text := p.result.text
-	if len(match) == 0 {
-		p.viewer.SetText(tview.Escape(text))
+	p.viewer.match = [2]int{}
+	if len(match) == 2 {
+		p.viewer.match = [2]int{match[0], match[1]}
+		p.viewer.selectBy(match[0], false)
+	}
+}
+
+func (p *payloadPane) loadFull() {
+	if !p.full {
 		return
 	}
-	start, end := match[0], match[1]
-	p.viewer.SetText(tview.Escape(text[:start]) + "[black:yellow]" + tview.Escape(text[start:end]) + "[-:-]" + tview.Escape(text[end:]))
-	row := strings.Count(text[:start], "\n")
-	line := strings.LastIndexByte(text[:start], '\n') + 1
-	col := tview.TaggedStringWidth(tview.Escape(text[line:start]))
-	p.viewer.ScrollTo(row, max(0, col-5))
+	if p.expanded && p.rendering {
+		p.notice("Load already in progress. Esc cancels.")
+		return
+	}
+	text := tview.NewTextView().SetWordWrap(true).SetText(
+		"Load and parse the retained values with up to 128 MiB of input and 128 MiB of displayed text. " +
+			"CSV remains limited to 50,000 rows and 256 columns. Trees keep up to 50,000 nodes and 128 levels per record. " +
+			"Large structured payloads can use substantially more memory. Esc cancels loading.")
+	d := p.u.dialog("Load full payload", text, text)
+	load := func() {
+		d.close()
+		p.expanded = true
+		p.refresh()
+	}
+	d.button("Load y", load)
+	cancel := d.button("Cancel Esc", d.close)
+	p.u.app.SetFocus(cancel)
+	d.keymap(func(e *tcell.EventKey) bool {
+		if e.Key() == tcell.KeyRune && e.Rune() == 'y' {
+			load()
+			return true
+		}
+		return false
+	})
 }
+
 func (p *payloadPane) scheduleSearch() {
-	if !p.full {
+	if !p.full || p.rendering {
 		return
 	}
 	p.searchRevision++
@@ -430,7 +505,6 @@ func (p *payloadPane) scheduleSearch() {
 	p.treeMatches = nil
 	p.matchesLimited = false
 	if query == "" {
-		p.status.SetText(safe(strings.ReplaceAll(p.result.warning, "\n", " · "), false))
 		p.setTextMatch(nil)
 		return
 	}
@@ -541,59 +615,6 @@ func (p *payloadPane) advance(change int) {
 		p.setTextMatch(p.textMatches[p.match])
 	}
 }
-func (u *ui) clipboard(text string) {
-	if u.screen == nil {
-		return
-	}
-	u.screen.SetClipboard([]byte(text))
-}
-func (p *payloadPane) copyValue() {
-	if len(p.records) == 0 {
-		p.notice("Select a record first")
-		return
-	}
-	records := append([]*storedRecord{}, p.records...)
-	revision := p.revision
-	go func() {
-		var values []string
-		var err error
-		for _, r := range records {
-			var v []byte
-			v, err = r.full()
-			if err != nil {
-				break
-			}
-			if v == nil {
-				values = append(values, "<tombstone>")
-			} else {
-				values = append(values, safe(string(v), true))
-			}
-		}
-		p.u.post(func() {
-			if p.revision != revision {
-				return
-			}
-			if err != nil {
-				p.notice(err.Error())
-				return
-			}
-			p.u.clipboard(strings.Join(values, "\n\n"))
-			p.notice("Clipboard transfer requested")
-		})
-	}()
-}
-func (p *payloadPane) copyView() {
-	if p.rendering && !p.metadataTab {
-		p.notice("Payload is still being prepared")
-		return
-	}
-	text := p.result.text
-	if p.metadataTab {
-		text = p.viewer.GetText(true)
-	}
-	p.u.clipboard(text)
-	p.notice("Clipboard transfer requested")
-}
 func (p *payloadPane) shortcut(key rune) bool {
 	switch key {
 	case 'm':
@@ -623,6 +644,13 @@ func (p *payloadPane) shortcut(key rune) bool {
 		p.copyValue()
 	case 'v':
 		p.copyView()
+	case 'E':
+		p.exportValue()
+	case 'L':
+		if !p.full {
+			return false
+		}
+		p.loadFull()
 	default:
 		return false
 	}

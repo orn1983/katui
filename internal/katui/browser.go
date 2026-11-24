@@ -350,6 +350,16 @@ func (u *ui) updateStatus() {
 		if r.info != "" {
 			summary = r.state + " · " + safe(r.info, false)
 		}
+		if store := u.store; store != nil {
+			if missed := store.missed.Load(); missed > 0 {
+				summary += fmt.Sprintf("\nWARNING: payload quota reached (%d preview-only) · ", missed)
+			} else {
+				summary += "\n"
+			}
+			summary += "Temp " + binarySize(ptr(store.used.Load())) + " / " + binarySize(&store.limit)
+		} else {
+			summary += "\nTemp storage unused"
+		}
 		summary += fmt.Sprintf("\nChecked %d/100 (%s / 8 MiB)", len(u.checked), binarySize(ptr(int64(u.checkedBytes))))
 		if len(u.readOptions.partitions) > 0 {
 			stream := "snapshot"

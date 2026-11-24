@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 const payloadQuota = 128 << 20
@@ -11,11 +12,12 @@ const payloadQuota = 128 << 20
 var errPayloadQuota = errors.New("complete payload unavailable: temporary storage limit reached")
 
 type payloadStore struct {
-	mu    sync.Mutex
-	dir   string
-	limit int64
-	used  int64
-	files map[string]int64
+	mu     sync.Mutex
+	dir    string
+	limit  int64
+	used   atomic.Int64
+	missed atomic.Uint64
+	files  map[string]int64
 }
 
 func newPayloadStore(dir string, limit int64) *payloadStore {
@@ -29,7 +31,8 @@ func (s *payloadStore) save(value []byte) (string, error) {
 		return "", os.ErrClosed
 	}
 	size := int64(len(value))
-	if size > s.limit-s.used {
+	if size > s.limit-s.used.Load() {
+		s.missed.Add(1)
 		return "", errPayloadQuota
 	}
 	f, err := os.CreateTemp(s.dir, "payload-*")
@@ -39,7 +42,7 @@ func (s *payloadStore) save(value []byte) (string, error) {
 	path := f.Name()
 	// Keep a conservative reservation if both writing and cleanup fail.
 	s.files[path] = size
-	s.used += size
+	s.used.Add(size)
 	_, writeErr := f.Write(value)
 	if err = errors.Join(writeErr, f.Close()); err != nil {
 		s.removeLocked(path)
@@ -58,7 +61,7 @@ func (s *payloadStore) removeLocked(path string) {
 	if size, ok := s.files[path]; ok {
 		if err := os.Remove(path); err == nil || errors.Is(err, os.ErrNotExist) {
 			delete(s.files, path)
-			s.used -= size
+			s.used.Add(-size)
 		}
 	}
 }

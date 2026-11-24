@@ -26,7 +26,7 @@ func (u *ui) resetMessages() {
 	}
 }
 func (u *ui) release(record *storedRecord) {
-	if record == nil || record.fullPath == "" || u.pinned == record {
+	if record == nil || record.fullPath == "" || u.pinned == record || u.payloadJobs[record] > 0 {
 		return
 	}
 	for _, set := range [][]*storedRecord{u.records, u.checked, u.modalRecords} {
@@ -140,7 +140,7 @@ func (u *ui) recordRows() ([]string, []int, []tableRow) {
 			value = "(pinned) " + value
 		}
 		rows = append(rows, tableRow{pinnedOnly: pinned, id: r.id.String(), topic: r.id.Topic, partition: r.id.Partition, record: r, cells: []string{
-			check, clock(r.timestamp), shortened(key, 100), fmt.Sprint(r.id.Partition), integer(r.id.offset), shortened(value, 300),
+			check, payloadAvailability(r), clock(r.timestamp), shortened(key, 100), fmt.Sprint(r.id.Partition), integer(r.id.offset), shortened(value, 300),
 		}})
 	}
 	if pinnedOnly != nil {
@@ -149,8 +149,15 @@ func (u *ui) recordRows() ([]string, []int, []tableRow) {
 	for _, r := range u.records {
 		addRow(r, false)
 	}
-	return []string{"✓", "Time", "Key", "P", "Offset", "Preview"}, []int{3, 14, 17, 5, 14, 64}, rows
+	return []string{"✓", "Value", "Time", "Key", "P", "Offset", "Preview"}, []int{3, 12, 14, 13, 5, 12, 64}, rows
 }
+func payloadAvailability(r *storedRecord) string {
+	if !r.fullAvailable() {
+		return "Preview only"
+	}
+	return "Complete"
+}
+
 func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 	if u.inspector != nil && u.inspector.mode.IsOpen() {
 		return ev
@@ -191,7 +198,7 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 			}
 			pane.focusFirst()
 		}
-	case 'm', 'd', 'h', 'o', 'u', 'y', 'v':
+	case 'm', 'd', 'h', 'o', 'u', 'y', 'v', 'E':
 		if pane != nil && pane.shortcut(ev.Rune()) {
 			return nil
 		}
@@ -277,7 +284,7 @@ func (u *ui) comparison() {
 	records := append([]*storedRecord{}, u.checked...)
 	u.payloadDialog(false, records, textMode(u.profile(records[0].id.Topic).Mode))
 }
-func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) {
+func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *payloadPane {
 	length := len(u.modalRecords)
 	u.modalRecords = append(u.modalRecords, records...)
 	p := u.newPayloadPane(full, !full, records)
@@ -301,18 +308,29 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) {
 			u.inspector.refresh()
 		}
 	}
-	d.cancel = close
+	d.cancel = func() {
+		if full && p.rendering {
+			p.cancelRender()
+			p.rendering = false
+			p.result.incomplete = true
+			p.status.SetText("Loading canceled")
+			d.say("Press L to load again or Esc to close.")
+			return
+		}
+		close()
+	}
 	if full {
-		d.button("Value y", p.copyValue)
-		d.button("View v", p.copyView)
+		d.button("Load full L", p.loadFull)
 		d.button("Prev p", func() { p.advance(-1) })
 		d.button("Next n", func() { p.advance(1) })
 	} else {
 		d.button("Payloads 1", func() { p.showMetadata(false) })
 		d.button("Metadata 2", func() { p.showMetadata(true) })
-		d.button("Copy y", p.copyView)
 		d.button("Full F4", func() { u.payloadDialog(true, records, p.modeName) })
 	}
+	d.button("Value y", p.copyValue)
+	d.button("View v", p.copyView)
+	d.button("Export E", p.exportValue)
 	d.button("Back Esc", close)
 	d.keymap(func(ev *tcell.EventKey) bool {
 		if isEditing(u.app.GetFocus()) {
@@ -322,15 +340,7 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) {
 			u.payloadDialog(true, records, p.modeName)
 			return true
 		}
-		if ev.Key() == tcell.KeyCtrlC {
-			p.copyView()
-			return true
-		}
-		if ev.Key() == tcell.KeyCtrlA {
-			p.notice("Ctrl+C copies the complete rendered view")
-			return true
-		}
-		if ev.Key() != tcell.KeyRune || ev.Modifiers() != 0 {
+		if ev.Key() != tcell.KeyRune || ev.Modifiers()&^tcell.ModShift != 0 {
 			return false
 		}
 		switch ev.Rune() {
@@ -364,13 +374,9 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) {
 				p.chooseTopic(nil)
 				return true
 			}
-		case 'y':
-			if !full {
-				p.copyView()
-				return true
-			}
 		}
 		return p.shortcut(ev.Rune())
 	})
 	p.refresh()
+	return p
 }

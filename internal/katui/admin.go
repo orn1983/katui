@@ -113,28 +113,35 @@ func kafkaError(code int16, message *string) error {
 }
 
 func (b *broker) identity(ctx context.Context, name string) (topicIdentity, error) {
-	md, err := b.metadata(ctx, name)
+	// Reviews must observe the broker's current topic ID, even when the
+	// monitoring client's metadata cache still has the previous topic.
+	req := kmsg.NewPtrMetadataRequest()
+	req.Topics = []kmsg.MetadataRequestTopic{{Topic: &name}}
+	md, err := req.RequestWith(ctx, b.client)
 	if err != nil {
 		return topicIdentity{}, err
 	}
-	t, ok := md[name]
-	if !ok {
-		return topicIdentity{}, fmt.Errorf("%s is missing from the metadata response", name)
-	}
-	if t.Err != nil {
-		return topicIdentity{}, t.Err
-	}
-	if t.ID == (kadm.TopicID{}) || len(t.Partitions) == 0 {
-		return topicIdentity{}, errors.New("Kafka did not provide a usable topic ID and partition layout")
-	}
-	var layout strings.Builder
-	for _, p := range t.Partitions.Sorted() {
-		if p.Err != nil {
-			return topicIdentity{}, p.Err
+	for _, t := range md.Topics {
+		if t.Topic == nil || *t.Topic != name {
+			continue
 		}
-		fmt.Fprintf(&layout, "%d=%v;", p.Partition, p.Replicas)
+		if err := kerr.ErrorForCode(t.ErrorCode); err != nil {
+			return topicIdentity{}, err
+		}
+		if t.TopicID == ([16]byte{}) || len(t.Partitions) == 0 {
+			return topicIdentity{}, errors.New("Kafka did not provide a usable topic ID and partition layout")
+		}
+		sort.Slice(t.Partitions, func(i, j int) bool { return t.Partitions[i].Partition < t.Partitions[j].Partition })
+		var layout strings.Builder
+		for _, p := range t.Partitions {
+			if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+				return topicIdentity{}, err
+			}
+			fmt.Fprintf(&layout, "%d=%v;", p.Partition, p.Replicas)
+		}
+		return topicIdentity{t.TopicID, layout.String(), len(t.Partitions)}, nil
 	}
-	return topicIdentity{t.ID, layout.String(), len(t.Partitions)}, nil
+	return topicIdentity{}, fmt.Errorf("%s is missing from the metadata response", name)
 }
 
 func (b *broker) settings(ctx context.Context, name string) (map[string]setting, error) {
@@ -179,20 +186,26 @@ func sortedKeys[V any](values map[string]V) []string {
 	return keys
 }
 
-func (b *broker) metadataBroker(ctx context.Context) (kadm.Metadata, int32, error) {
-	md, err := b.admin.BrokerMetadata(ctx)
+func (b *broker) metadataBroker(ctx context.Context) (string, int32, error) {
+	req := kmsg.NewPtrMetadataRequest()
+	req.Topics = []kmsg.MetadataRequestTopic{}
+	md, err := req.RequestWith(ctx, b.client)
 	if err != nil {
-		return md, -1, err
+		return "", -1, err
 	}
 	if len(md.Brokers) == 0 {
-		return md, -1, errors.New("no brokers advertised")
+		return "", -1, errors.New("no brokers advertised")
+	}
+	cluster := ""
+	if md.ClusterID != nil {
+		cluster = *md.ClusterID
 	}
 	for _, broker := range md.Brokers {
-		if broker.NodeID == md.Controller {
-			return md, md.Controller, nil
+		if broker.NodeID == md.ControllerID {
+			return cluster, md.ControllerID, nil
 		}
 	}
-	return md, md.Brokers[0].NodeID, nil
+	return cluster, md.Brokers[0].NodeID, nil
 }
 
 func (b *broker) supported(ctx context.Context, id int32, key, minimum int16) error {
@@ -419,11 +432,11 @@ func (b *broker) timestampOffsets(ctx context.Context, selected []partKey, ms in
 func (b *broker) prepareAdmin(ctx context.Context, in adminInput) (adminPlan, error) {
 	p := adminPlan{operation: in.operation, target: in.target, partitions: in.partitions, replicas: in.replicas, settings: in.settings, topics: map[string]topicIdentity{},
 		oldSettings: map[string]setting{}}
-	md, brokerID, err := b.metadataBroker(ctx)
+	cluster, brokerID, err := b.metadataBroker(ctx)
 	if err != nil {
 		return p, err
 	}
-	p.cluster = md.Cluster
+	p.cluster = cluster
 	var preview strings.Builder
 	fmt.Fprintf(&preview, "Cluster  %s", b.cluster)
 	if p.cluster != "" {
@@ -624,11 +637,11 @@ func comparePart(a, b partKey) int {
 }
 
 func (b *broker) applyAdmin(ctx context.Context, p adminPlan) (bool, error) {
-	md, brokerID, err := b.metadataBroker(ctx)
+	cluster, brokerID, err := b.metadataBroker(ctx)
 	if err != nil {
 		return false, err
 	}
-	if md.Cluster != p.cluster {
+	if cluster != p.cluster {
 		return false, errors.New("cluster identity changed; review again")
 	}
 	for _, topic := range sortedKeys(p.topics) {

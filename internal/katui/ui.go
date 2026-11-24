@@ -95,6 +95,7 @@ type ui struct {
 	evictions                      int
 	checked                        []*storedRecord
 	modalRecords                   []*storedRecord
+	payloadJobs                    map[*storedRecord]int
 	checkedBytes                   int
 	pinned                         *storedRecord
 	followLatest                   bool
@@ -424,6 +425,11 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.applyUpdates()
 		return nil
 	}
+	if ev.Key() == tcell.KeyCtrlC {
+		if _, ok := u.app.GetFocus().(*payloadText); ok {
+			return tcell.NewEventKey(ev.Key(), ev.Rune(), ev.Modifiers())
+		}
+	}
 	if u.modalDepth == 0 && u.connectionPending() {
 		switch {
 		case ev.Key() == tcell.KeyEscape:
@@ -444,7 +450,7 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 			// tview stops the app when the capture returns the original Ctrl+C.
 			return tcell.NewEventKey(ev.Key(), ev.Rune(), ev.Modifiers())
 		case u.workspace == 2 && u.inspector != nil && u.inspector.root.HasFocus():
-			u.inspector.copyView()
+			u.say("Focus payload text to copy a selection")
 		default:
 			u.interrupted = true
 			u.app.Stop()
@@ -456,12 +462,6 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	}
 	if u.inspector != nil && u.workspace == 2 && u.inspector.mode.IsOpen() {
 		return ev
-	}
-	if u.workspace == 2 && u.inspector != nil && u.inspector.root.HasFocus() {
-		if ev.Key() == tcell.KeyCtrlA {
-			u.say("Ctrl+C copies the rendered view")
-			return nil
-		}
 	}
 	if ev.Key() == tcell.KeyCtrlP {
 		u.palette()
@@ -722,7 +722,7 @@ func (u *ui) refreshView() {
 		u.body.Clear()
 		statusRows := 2
 		if loc.kind == "messages" {
-			statusRows = 3
+			statusRows = 4
 		}
 		u.shell.Clear().AddItem(u.header, 1, 0, false)
 		if u.fullscreen == "" {

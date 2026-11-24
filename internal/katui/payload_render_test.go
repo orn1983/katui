@@ -1,6 +1,7 @@
 package katui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,16 +14,16 @@ func TestJSONDisplayDepth(t *testing.T) {
 	nested := func(n int) []byte {
 		return []byte(strings.Repeat("[", n) + `"A quoted [bracket], a \" quote and a \\ slash"` + strings.Repeat("]", n))
 	}
-	if _, err := prettyJSON(nested(n)); err != nil {
+	if _, err := prettyJSON(t.Context(), nested(n), maxRenderedPayload); err != nil {
 		t.Fatalf("formatting at the depth limit: %v", err)
 	}
-	if _, err := prettyJSON(nested(n + 1)); err == nil {
+	if _, err := prettyJSON(t.Context(), nested(n+1), maxRenderedPayload); err == nil {
 		t.Fatal("expected an error above the display depth limit")
 	}
 }
 
 func TestRenderTextKeepsUTF8AndHonorsBudget(t *testing.T) {
-	var text renderText
+	text := renderText{limit: maxRenderedPayload}
 	_, _ = text.WriteString(strings.Repeat("a", maxRenderedPayload-1))
 	_, _ = text.WriteString("☃")
 	_, _ = text.WriteString("x")
@@ -38,7 +39,7 @@ func TestBoundedDisplayKeepsOriginalPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := &storedRecord{valueSize: len(value), fullPath: path}
-	prefix, limited, err := renderValue(record, 4)
+	prefix, limited, err := renderValue(context.Background(), record, 4)
 	if err != nil || !limited || string(prefix) != "abc" {
 		t.Fatalf("display prefix %q, limited %t, error %v", prefix, limited, err)
 	}

@@ -30,9 +30,12 @@ type options struct {
 	cli           string
 	commandConfig string
 
-	interval     time.Duration
-	timeout      time.Duration
-	sizeInterval time.Duration
+	interval                        time.Duration
+	timeout                         time.Duration
+	sizeInterval                    time.Duration
+	structuredInput, renderedOutput int
+	payloadStorage                  int64
+	payloadStorageSet               bool
 
 	once        bool
 	noCache     bool
@@ -44,6 +47,8 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	var o options
 	var brokers string
 	var interval, timeout, size float64
+	var inputMiB, outputMiB int
+	var storageMiB int64
 	flags := flag.NewFlagSet("katui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	for _, name := range []string{"b", "bootstrap-server"} {
@@ -63,6 +68,9 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	}
 	flags.Float64Var(&timeout, "timeout", 20, "request timeout in seconds")
 	flags.Float64Var(&size, "size-interval", 30, "disk sampling interval in seconds")
+	flags.IntVar(&inputMiB, "structured-input-mib", maxStructuredInput>>20, "default structured payload input limit in MiB")
+	flags.IntVar(&outputMiB, "rendered-output-mib", maxRenderedPayload>>20, "default payload display limit in MiB")
+	flags.Int64Var(&storageMiB, "payload-storage-mib", payloadQuota>>20, "temporary storage for complete payloads in MiB (0 disables spilling)")
 	flags.StringVar(&o.profileName, "cluster", "", "choose a named saved cluster")
 	flags.StringVar(&o.view, "view", "", "topics or groups")
 	flags.StringVar(&o.backend, "backend", "api", "api or cli")
@@ -83,6 +91,14 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	if o.version {
 		return o, nil
 	}
+	if inputMiB < 1 || inputMiB > maxInspectionBytes>>20 || outputMiB < 1 || outputMiB > maxInspectionBytes>>20 {
+		return o, fmt.Errorf("payload input and display limits must be 1–%d MiB", maxInspectionBytes>>20)
+	}
+	if storageMiB < 0 || storageMiB > 1<<20 {
+		return o, errors.New("payload storage must be 0–1048576 MiB")
+	}
+	o.structuredInput, o.renderedOutput = inputMiB<<20, outputMiB<<20
+	o.payloadStorage, o.payloadStorageSet = storageMiB<<20, true
 	brokersSpecified := false
 	flags.Visit(func(f *flag.Flag) {
 		if f.Name == "b" || f.Name == "bootstrap-server" {

@@ -15,7 +15,13 @@ The executable entry point is `main.go`. Kafka operations, the terminal UI, and 
 
 ## Connect
 
-Supply the brokers for your cluster with `-b`. The default is `localhost:9092`. Kafka clients need network access to the advertised broker addresses as well as the bootstrap address.
+Run `./katui` to choose a saved cluster or open **Connect to Kafka**. Enter the broker addresses and choose plaintext, TLS, SASL with TLS, SASL plaintext with SCRAM, or an existing client-config JSON file. The dialog can browse for CA certificates, client certificates, private keys, and configuration files. Press `4` or choose **Kafka clusters** from Ctrl+P to add, edit, or switch profiles. Switching clusters stops the current reader and opens a fresh view.
+
+Choose **Save profile** and enter a name to keep the settings. With SASL, the profile asks for the password at the next connection unless you also select **Remember password**. A remembered password is written to the local profile JSON with private file permissions. Imported client configuration and TLS files are referenced by path. Profiles live in `$XDG_CONFIG_HOME/katui/connections.json`, falling back to `~/.config/katui/connections.json`. The CLI backend uses `cli-connections.json`.
+
+Use `-b` to supply broker addresses directly or `--cluster NAME` to select a saved profile. `--once` requires one of these options and a complete configuration. While a connection is pending, Esc cancels it, `r` retries from the main view, and `q` opens quit confirmation. Kafka clients need network access to the advertised broker addresses as well as the bootstrap address.
+
+Inspector preferences are keyed by the set of bootstrap addresses and the topic. When moving from an earlier Katui build, pass the same broker addresses with `-b` to reuse its saved profiles.
 
 ```sh
 ./katui -b broker.example.net:9092 -i 2

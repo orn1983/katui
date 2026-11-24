@@ -389,6 +389,18 @@ func (u *ui) updateStatus() {
 		}
 	default:
 		summary = fmt.Sprintf("%d rows", len(u.rows))
+		request, label := u.monitorRequest(), "topics"
+		if loc.kind == "groups" {
+			label = "consumer groups"
+		}
+		if len(u.rows) == 0 {
+			switch {
+			case u.busy[request] && u.next[request].IsZero():
+				summary = "Connecting to Kafka…"
+			case u.errors[request] != "":
+				summary = "Could not load " + label
+			}
+		}
 	}
 	kinds := []string{"metadata", "offsets", "disk", "groups", "group"}
 	if u.workspace != 2 {
@@ -399,6 +411,12 @@ func (u *ui) updateStatus() {
 		}
 	}
 	bottom := "? Help  Ctrl+P Commands  q Quit"
+	if u.connectionPending() {
+		bottom = "Esc Cancel connection  ·  q Quit"
+	}
+	if u.workspace != 2 && u.monitorPaused {
+		summary = "Connection canceled  ·  r Retry  ·  4 Clusters"
+	}
 	if u.fullscreen != "" {
 		bottom = "Esc / z Restore  ·  " + bottom
 	}

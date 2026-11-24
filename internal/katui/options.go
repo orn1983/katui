@@ -14,15 +14,17 @@ import (
 )
 
 type options struct {
-	brokers   []string
-	cluster   string
-	view      string
-	group     string
-	topic     string
-	partition int
+	brokers     []string
+	cluster     string
+	profileName string
+	view        string
+	group       string
+	topic       string
+	partition   int
 
 	backend       string
 	config        string
+	security      *securityConfig
 	sizeConfig    string
 	inspector     string
 	cli           string
@@ -32,9 +34,10 @@ type options struct {
 	timeout      time.Duration
 	sizeInterval time.Duration
 
-	once    bool
-	noCache bool
-	version bool
+	once        bool
+	noCache     bool
+	noCacheFlag bool
+	version     bool
 }
 
 func arguments(args []string, stderr io.Writer) (options, error) {
@@ -44,7 +47,7 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	flags := flag.NewFlagSet("katui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	for _, name := range []string{"b", "bootstrap-server"} {
-		flags.StringVar(&brokers, name, "localhost:9092", "comma-separated brokers")
+		flags.StringVar(&brokers, name, "", "comma-separated brokers")
 	}
 	for _, name := range []string{"g", "group"} {
 		flags.StringVar(&o.group, name, "", "consumer group")
@@ -60,6 +63,7 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	}
 	flags.Float64Var(&timeout, "timeout", 20, "request timeout in seconds")
 	flags.Float64Var(&size, "size-interval", 30, "disk sampling interval in seconds")
+	flags.StringVar(&o.profileName, "cluster", "", "choose a named saved cluster")
 	flags.StringVar(&o.view, "view", "", "topics or groups")
 	flags.StringVar(&o.backend, "backend", "api", "api or cli")
 	flags.StringVar(&o.config, "client-config", "", "JSON broker connection settings")
@@ -67,7 +71,7 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	flags.StringVar(&o.inspector, "inspector-config", defaultPath("XDG_CONFIG_HOME", ".config", "inspectors.json"), "inspector preferences")
 	flags.StringVar(&o.cli, "kafka-cli", "", "path to kafka-consumer-groups.sh")
 	flags.StringVar(&o.commandConfig, "command-config", "", "Kafka CLI connection properties")
-	flags.BoolVar(&o.noCache, "no-cache", false, "disable monitoring cache")
+	flags.BoolVar(&o.noCacheFlag, "no-cache", false, "disable monitoring cache")
 	flags.BoolVar(&o.once, "once", false, "print one JSON snapshot")
 	flags.BoolVar(&o.version, "version", false, "print version")
 	if err := flags.Parse(args); err != nil {
@@ -79,7 +83,11 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	if o.version {
 		return o, nil
 	}
+	brokersSpecified := false
 	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "b" || f.Name == "bootstrap-server" {
+			brokersSpecified = true
+		}
 		if (f.Name == "p" || f.Name == "partition") && o.partition < 0 {
 			o.partition = -2
 		}
@@ -99,24 +107,21 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	if o.backend == "cli" && (o.config != "" || o.sizeConfig != "" || o.view == "topics" || (o.topic != "" && o.group == "")) {
 		return o, errors.New("CLI backend supports group monitoring and --command-config")
 	}
-	// Cache files do not record the identity used to obtain the snapshot.
-	o.noCache = o.noCache || o.config != "" || o.sizeConfig != "" || o.commandConfig != ""
+	o.setCachePolicy()
 	if o.view == "" {
 		o.view = "topics"
 		if o.group != "" || o.backend == "cli" {
 			o.view = "groups"
 		}
 	}
-	for _, address := range strings.Split(brokers, ",") {
-		address = strings.TrimSpace(address)
-		if address == "" {
-			return o, errors.New("empty bootstrap server address")
+	if brokersSpecified {
+		if o.profileName != "" {
+			return o, errors.New("--cluster and -b cannot be used together")
 		}
-		o.brokers = append(o.brokers, address)
+		if err := o.setBrokers(brokers); err != nil {
+			return o, err
+		}
 	}
-	cluster := append([]string(nil), o.brokers...)
-	sort.Strings(cluster)
-	o.cluster = strings.Join(cluster, ",")
 	for _, item := range []struct {
 		name  string
 		value float64
@@ -131,6 +136,25 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 		*item.dest = time.Duration(ns)
 	}
 	return o, nil
+}
+
+func (o *options) setBrokers(text string) error {
+	brokers := strings.Split(text, ",")
+	for i, address := range brokers {
+		address = strings.TrimSpace(address)
+		if address == "" {
+			return errors.New("enter a Kafka broker address")
+		}
+		if strings.ContainsAny(address, " /\t\r\n") {
+			return fmt.Errorf("invalid broker address %q; use host:port", address)
+		}
+		brokers[i] = address
+	}
+	cluster := append([]string(nil), brokers...)
+	sort.Strings(cluster)
+	o.brokers = brokers
+	o.cluster = strings.Join(cluster, ",")
+	return nil
 }
 
 func defaultPath(variable, fallback, name string) string {

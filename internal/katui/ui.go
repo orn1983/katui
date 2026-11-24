@@ -36,6 +36,7 @@ type tableRow struct {
 type ui struct {
 	ctx                            context.Context
 	b                              *broker
+	nextBroker                     *broker
 	app                            *tview.Application
 	screen                         tcell.Screen
 	pages                          *tview.Pages
@@ -62,6 +63,7 @@ type ui struct {
 	updateEvent                    *tcell.EventKey
 	updates                        chan func()
 	monitoring                     atomic.Bool
+	monitorPaused                  bool
 	metadata                       kadm.TopicDetails
 	topics                         map[string]topicSample
 	sizes                          map[partKey]int64
@@ -130,9 +132,11 @@ func newUI(ctx context.Context, b *broker) *ui {
 		}
 	}
 	u.invalidateMonitor()
-	u.loadCache()
-	u.prefs = loadPreferences(expandHome(b.inspector), b.cluster)
-	u.message = errorText(u.prefs.err)
+	if len(b.brokers) != 0 {
+		u.loadCache()
+		u.prefs = loadPreferences(expandHome(b.inspector), b.cluster)
+		u.message = errorText(u.prefs.err)
+	}
 	return u
 }
 
@@ -177,7 +181,7 @@ func (u *ui) run() error {
 	u.pages.AddPage("main", u.shell, true, true)
 	u.app.SetRoot(u.pages, true).EnableMouse(true).EnablePaste(true).SetInputCapture(u.keys)
 	u.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
-		u.monitoring.Store(u.workspace != 2 && u.modalDepth == 0)
+		u.monitoring.Store(len(u.b.brokers) != 0 && !u.monitorPaused && u.workspace != 2 && u.modalDepth == 0)
 		if u.screen == nil {
 			u.screen = screen
 			close(u.screenReady)
@@ -193,6 +197,9 @@ func (u *ui) run() error {
 		return false
 	})
 	u.showLocation()
+	if len(u.b.brokers) == 0 {
+		u.clustersDialog()
+	}
 	err := u.app.Run()
 	if u.interrupted {
 		return errInterrupted
@@ -417,6 +424,20 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.applyUpdates()
 		return nil
 	}
+	if u.modalDepth == 0 && u.connectionPending() {
+		switch {
+		case ev.Key() == tcell.KeyEscape:
+			u.cancelConnection()
+			return nil
+		case ev.Key() == tcell.KeyRune && ev.Rune() == 'q' && ev.Modifiers() == 0:
+			u.quit()
+			return nil
+		case ev.Key() == tcell.KeyCtrlC:
+			u.interrupted = true
+			u.app.Stop()
+			return nil
+		}
+	}
 	if ev.Key() == tcell.KeyCtrlC {
 		switch {
 		case u.modalDepth > 0 || u.search.HasFocus():
@@ -485,6 +506,8 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.fullscreen = ""
 		u.refreshView()
 		u.focus(u.search)
+	case '4':
+		u.clustersDialog()
 	case 'q':
 		u.quit()
 	case '?':
@@ -594,6 +617,7 @@ func (u *ui) cycleFocus(reverse bool) {
 }
 
 func (u *ui) requestRefresh() {
+	u.monitorPaused = false
 	u.invalidateMonitor()
 	u.poll()
 	if u.workspace != 2 {
@@ -664,7 +688,14 @@ func (u *ui) refreshView() {
 		return
 	}
 	loc := u.current()
-	u.header.SetText(fmt.Sprintf("Katui  ·  %s  ·  poll %s", safe(u.b.cluster, false), u.b.interval))
+	header := "Katui"
+	if u.b.cluster != "" {
+		if u.b.profileName != "" {
+			header += "  ·  " + safe(u.b.profileName, false)
+		}
+		header += fmt.Sprintf("  ·  %s  ·  poll %s", safe(u.b.cluster, false), u.b.interval)
+	}
+	u.header.SetText(header)
 	labels := []string{"1 Topics", "2 Consumer Groups", "3 Messages"}
 	for i, label := range labels {
 		if i == u.workspace {
@@ -673,7 +704,7 @@ func (u *ui) refreshView() {
 			labels[i] = " " + label + " "
 		}
 	}
-	u.tabs.SetText(strings.Join(labels, "  "))
+	u.tabs.SetText(strings.Join(labels, "  ") + "   4 Clusters")
 	actions := map[string]string{
 		"topics":       "Enter Open   g Consumers   c Consume   a Manage   n Create   d Delete   h Internal",
 		"topic":        "Esc Back   Enter Partition   g Consumers   c Consume   a Manage   d Delete",

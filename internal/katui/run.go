@@ -42,26 +42,29 @@ func run(ctx context.Context, args []string) error {
 		return errors.New("interactive mode requires a terminal; use --once for JSON output")
 	}
 	b := &broker{options: o}
-	if o.backend == "api" {
-		b.client, err = o.kafka(o.config)
+	if o.profileName != "" {
+		profiles, err := loadConnectionProfiles(o.backend)
 		if err != nil {
 			return err
 		}
-		defer b.client.Close()
-		b.admin = kadm.NewClient(b.client)
-		b.disk = b.admin
-		if o.sizeConfig != "" {
-			disk, err := o.kafka(o.sizeConfig)
-			if err != nil {
-				return err
-			}
-			defer disk.Close()
-			b.disk = kadm.NewClient(disk)
+		p, ok := profiles[o.profileName]
+		if !ok {
+			return fmt.Errorf("saved cluster %q was not found", o.profileName)
 		}
-	} else if err = b.findCLI(); err != nil {
-		return err
+		if err := b.selectConnection(p); err != nil && (o.once || !errors.Is(err, errProfilePassword)) {
+			return err
+		}
+	}
+	if len(b.brokers) != 0 {
+		if err := b.open(); err != nil {
+			return err
+		}
 	}
 	if o.once {
+		defer b.close()
+		if len(b.brokers) == 0 {
+			return errors.New("no Kafka connection configured; pass -b host:port or --cluster NAME")
+		}
 		req, cancel := context.WithTimeout(ctx, o.timeout)
 		defer cancel()
 		value, err := b.once(req)
@@ -72,5 +75,44 @@ func run(ctx context.Context, args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(value)
 	}
-	return newUI(ctx, b).run()
+	for {
+		u := newUI(ctx, b)
+		err := u.run()
+		b.close()
+		if err != nil || u.nextBroker == nil {
+			return err
+		}
+		b = u.nextBroker
+	}
+}
+
+func (b *broker) open() error {
+	if b.backend == "cli" {
+		return b.findCLI()
+	}
+	client, err := b.kafka(b.config)
+	if err != nil {
+		return err
+	}
+	admin := kadm.NewClient(client)
+	disk := admin
+	if b.sizeConfig != "" {
+		sizeClient, err := b.kafka(b.sizeConfig)
+		if err != nil {
+			client.Close()
+			return err
+		}
+		disk = kadm.NewClient(sizeClient)
+	}
+	b.client, b.admin, b.disk = client, admin, disk
+	return nil
+}
+
+func (b *broker) close() {
+	if b.disk != nil && b.disk != b.admin {
+		b.disk.Close()
+	}
+	if b.client != nil {
+		b.client.Close()
+	}
 }

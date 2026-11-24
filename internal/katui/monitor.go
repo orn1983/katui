@@ -128,8 +128,39 @@ func (u *ui) sample(kind string, interval time.Duration, work func(context.Conte
 	}()
 }
 
+func (u *ui) monitorRequest() string {
+	switch u.current().kind {
+	case "topics", "topic", "topic-detail":
+		return "metadata"
+	case "group", "group-detail":
+		return "group"
+	default:
+		return "groups"
+	}
+}
+
+func (u *ui) connectionPending() bool {
+	if u.workspace == 2 {
+		return u.readerState.state == "CONNECTING" || u.readerState.state == "RECONNECTING"
+	}
+	request := u.monitorRequest()
+	return !u.monitorPaused && (u.busy[request] || u.errors[request] != "")
+}
+
+func (u *ui) cancelConnection() {
+	if u.workspace == 2 {
+		u.stopReader()
+	} else {
+		u.invalidateMonitor()
+		u.pendingGroups = false
+		u.monitorPaused = true
+	}
+	u.focus(u.mainPane())
+	u.updateStatus()
+}
+
 func (u *ui) poll() {
-	if u.modalDepth > 0 || u.workspace == 2 {
+	if u.monitorPaused || len(u.b.brokers) == 0 || u.modalDepth > 0 || u.workspace == 2 {
 		return
 	}
 	loc := u.current()

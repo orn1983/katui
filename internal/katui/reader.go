@@ -278,9 +278,19 @@ func (u *ui) consume(topic string, id int32) {
 	}
 	d.button("All Alt+A", func() { selector.every(true) })
 	d.button("None Alt+N", func() { selector.every(false) })
-	d.button("Cancel", d.close)
+	ctx, cancel := context.WithTimeout(u.ctx, u.b.timeout)
+	d.cancel = func() {
+		cancel()
+		d.close()
+	}
+	d.button("Cancel", d.cancel)
 	goBtn := d.button("Go Alt+G", goRead).SetDisabled(true)
 	d.keymap(func(e *tcell.EventKey) bool {
+		if loading && e.Key() == tcell.KeyRune && e.Rune() == 'q' && e.Modifiers() == 0 && !isEditing(u.app.GetFocus()) {
+			d.cancel()
+			u.quit()
+			return true
+		}
 		switch a := alt(e); a {
 		case 'p':
 			u.app.SetFocus(selector.list)
@@ -325,11 +335,11 @@ func (u *ui) consume(topic string, id int32) {
 		goBtn.SetDisabled(len(selector.ids) == 0)
 	}
 	if md, ok := u.metadata[topic]; ok && md.Err == nil {
+		cancel()
 		populate(md)
 		return
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(u.ctx, u.b.timeout)
 		defer cancel()
 		metadata, err := u.b.metadata(ctx, topic)
 		u.post(func() {

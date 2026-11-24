@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/rivo/tview"
 )
 
 func (u *ui) freshness(at time.Time, err string, threshold time.Duration) string {
@@ -420,20 +422,22 @@ func (u *ui) updateStatus() {
 			}
 		}
 	}
-	bottom := "? Help  Ctrl+P Commands  q Quit"
+	k := keyHint
+	bottom := k("?") + " Help  " + k("Ctrl+P") + " Commands  " + k("q") + " Quit"
 	if u.connectionPending() {
-		bottom = "Esc Cancel connection  ·  q Quit"
+		bottom = k("Esc") + " Cancel connection  ·  " + k("q") + " Quit"
 	}
+	summary = tview.Escape(safe(summary, true))
 	if u.workspace != 2 && u.monitorPaused {
-		summary = "Connection canceled  ·  r Retry  ·  4 Clusters"
+		summary = "Connection canceled  ·  " + k("r") + " Retry  ·  " + k("4") + " Clusters"
 	}
 	if u.fullscreen != "" {
-		bottom = "Esc / z Restore  ·  " + bottom
+		bottom = k("Esc") + " " + k("z") + " Restore  ·  " + bottom
 	}
 	if u.message != "" {
-		bottom = u.message + "  ·  " + bottom
+		bottom = tview.Escape(u.message) + "  ·  " + bottom
 	}
-	text := safe(summary, true) + "\n" + bottom
+	text := summary + "\n" + bottom
 	if u.status.GetText(false) != text {
 		u.status.SetText(text)
 	}

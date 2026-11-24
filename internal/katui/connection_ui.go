@@ -1,6 +1,8 @@
 package katui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -20,72 +22,235 @@ const (
 func (u *ui) clustersDialog() {
 	profiles, err := loadConnectionProfiles(u.b.backend)
 	starting := len(u.b.brokers) == 0
-	if starting {
-		if name := u.b.profileName; name != "" && err == nil {
-			u.connectionDialog(name, profiles[name], "")
-			return
-		}
-		if len(profiles) == 0 {
-			u.connectionDialog("", connectionProfile{}, errorText(err))
-			return
-		}
+	if starting && len(profiles) == 0 {
+		u.connectionDialog("", connectionProfile{}, errorText(err))
+		return
 	}
-	list := tview.NewList().SetMainTextColor(u.accent)
+
+	names := sortedKeys(profiles)
+	list := tview.NewList().SetHighlightFullLine(true).
+		SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(u.accent).Bold(true))
 	d := u.dialog("Kafka clusters", list, list)
-	if starting {
-		d.cancel = u.app.Stop
+	k := keyHint
+	idleHint := k("↑") + " " + k("↓") + " Select  ·  " + k("c") + " Connect  ·  " + k("q") + " Quit"
+	if !starting {
+		idleHint += "\nSwitching clusters stops the active reader."
 	}
+
 	newConnection := func() { u.connectionDialog("", connectionProfile{}, "") }
-	for _, name := range sortedKeys(profiles) {
-		profile := profiles[name]
-		list.AddItem(tview.Escape(safe(name, false)), tview.Escape(safe(strings.Join(profile.Brokers, ", "), false)), 0, func() {
+	var cancelAttempt context.CancelFunc
+	var connectButton, editButton, newButton *tview.Button
+	setChecking := func(checking bool) {
+		connectButton.SetDisabled(checking || len(names) == 0)
+		editButton.SetDisabled(checking || len(names) == 0)
+		newButton.SetDisabled(checking)
+	}
+	selected := func() (string, connectionProfile) {
+		if i := list.GetCurrentItem(); i >= 0 && i < len(names) {
+			return names[i], profiles[names[i]]
+		}
+		return "", connectionProfile{}
+	}
+	edit := func() {
+		if name, profile := selected(); name != "" && cancelAttempt == nil {
 			u.connectionDialog(name, profile, "")
+		}
+	}
+	connect := func() {
+		name, profile := selected()
+		if name == "" || cancelAttempt != nil {
+			return
+		}
+		opts := u.b.options
+		opts.profileName = name
+		if !starting {
+			opts.config, opts.commandConfig, opts.security, opts.sizeConfig = "", "", nil, ""
+		}
+		if err := opts.selectConnection(profile); err != nil {
+			if errors.Is(err, errProfilePassword) && profile.Security != nil {
+				u.clusterPassword(opts, profile)
+				return
+			}
+			d.say(err.Error())
+			return
+		}
+		ctx, cancel := context.WithCancel(u.ctx)
+		cancelAttempt = cancel
+		setChecking(true)
+		d.hint("Checking " + tview.Escape(safe(name, false)) + "…  " + k("Esc") + " Cancel")
+		u.openConnection(d, ctx, opts, func(candidate *broker, err error) {
+			cancel()
+			cancelAttempt = nil
+			setChecking(false)
+			if err != nil {
+				d.hint(tview.Escape(safe(err.Error(), false)) + "\n" + idleHint)
+				u.app.SetFocus(list)
+				return
+			}
+			u.nextBroker = candidate
+			u.app.Stop()
 		})
 	}
-	open := func() {
-		if i := list.GetCurrentItem(); i >= 0 && i < list.GetItemCount() {
-			list.GetItemSelectedFunc(i)()
+	for _, name := range names {
+		profile := profiles[name]
+		label := safe(name, false)
+		if !starting && name == u.b.profileName {
+			label += " · current"
+		}
+		description := safe(strings.Join(profile.Brokers, ", "), false)
+		if profile.PromptPassword && u.b.backend != "cli" {
+			description += " · password required"
+		}
+		list.AddItem(tview.Escape(label), tview.Escape(description), 0, nil)
+		if name == u.b.profileName {
+			list.SetCurrentItem(list.GetItemCount() - 1)
 		}
 	}
-	openButton := d.button("Open", open)
-	d.button("New n", newConnection)
-	closeLabel := "Back Esc"
+	d.cancel = func() {
+		if cancelAttempt != nil {
+			cancelAttempt()
+			cancelAttempt = nil
+			setChecking(false)
+			d.hint(idleHint)
+			u.app.SetFocus(list)
+			return
+		}
+		if starting {
+			u.app.Stop()
+		} else {
+			d.close()
+		}
+	}
+	connectButton = d.button("Connect", "Enter", connect)
+	editButton = d.button("Edit", "e", edit)
+	newButton = d.button("New", "n", newConnection)
+	closeLabel := "Back"
 	if starting {
-		closeLabel = "Quit Esc"
+		closeLabel = "Quit"
 	}
-	d.button(closeLabel, d.cancel)
-	if err != nil {
+	d.button(closeLabel, "Esc", d.cancel)
+	setChecking(false)
+	switch {
+	case err != nil:
 		d.say(err.Error())
-	} else if len(profiles) == 0 {
-		d.say("No saved clusters. Choose New to add one.")
-		u.app.SetFocus(d.buttons[1])
-	} else if !starting {
-		d.say("Open a profile to connect or edit it. Switching clusters stops the active reader.")
+	case len(names) == 0:
+		d.hint("No saved clusters. " + k("n") + " New connection")
+		u.app.SetFocus(newButton)
+	default:
+		d.hint(idleHint)
 	}
-	openButton.SetDisabled(len(profiles) == 0)
 	d.keymap(func(e *tcell.EventKey) bool {
 		if e.Key() == tcell.KeyCtrlC && starting {
 			u.interrupted = true
 			u.app.Stop()
 			return true
 		}
-		if e.Key() != tcell.KeyRune || e.Modifiers() != 0 {
-			return false
-		}
-		switch e.Rune() {
-		case 'n':
-			newConnection()
-		case 'q':
+		if e.Key() == tcell.KeyRune && e.Rune() == 'q' && e.Modifiers() == 0 {
 			if starting {
 				u.app.Stop()
 			} else {
 				u.quit()
 			}
+			return true
+		}
+		if cancelAttempt != nil {
+			return true
+		}
+		if e.Key() == tcell.KeyEnter && list.HasFocus() {
+			connect()
+			return true
+		}
+		if (e.Key() == tcell.KeyUp || e.Key() == tcell.KeyDown) && !list.HasFocus() {
+			u.app.SetFocus(list)
+			return false
+		}
+		if e.Key() != tcell.KeyRune || e.Modifiers() != 0 {
+			return false
+		}
+		switch e.Rune() {
+		case 'c':
+			connect()
+		case 'e':
+			edit()
+		case 'n':
+			newConnection()
 		default:
 			return false
 		}
 		return true
 	})
+	if _, exists := profiles[u.b.profileName]; starting && u.b.profileName != "" && exists {
+		// An explicitly requested profile reaches the picker only when it
+		// needs interactive credentials.
+		connect()
+	}
+}
+
+func (u *ui) clusterPassword(opts options, profile connectionProfile) {
+	password := tview.NewInputField().SetLabel("Password ").SetMaskCharacter('•')
+	body := tview.NewFlex().SetDirection(tview.FlexRow)
+	title := "Connect to " + opts.profileName
+	username := tview.NewTextView().SetText("SASL username: " + safe(profile.Security.SASL.Username, false))
+	body.AddItem(username, 1, 0, false).AddItem(password, 1, 0, true)
+	d := u.dialog(title, body, password)
+	d.hint("Enter the password for this session.")
+	ctx, cancel := context.WithCancel(u.ctx)
+	d.cancel = func() {
+		cancel()
+		d.close()
+	}
+	var button *tview.Button
+	connect := func() {
+		if button.IsDisabled() || password.GetText() == "" {
+			return
+		}
+		security := *profile.Security
+		security.SASL.Password = password.GetText()
+		profile.Security, profile.PromptPassword = &security, false
+		if err := opts.selectConnection(profile); err != nil {
+			d.say(err.Error())
+			return
+		}
+		button.SetDisabled(true)
+		d.hint("Checking connection settings…  " + keyHint("Esc") + " Cancel")
+		u.openConnection(d, ctx, opts, func(candidate *broker, err error) {
+			if err != nil {
+				button.SetDisabled(false)
+				d.say(err.Error())
+				return
+			}
+			u.nextBroker = candidate
+			u.app.Stop()
+		})
+	}
+	button = d.button("Connect", "Enter", connect)
+	d.button("Back", "Esc", d.cancel)
+	d.keymap(func(e *tcell.EventKey) bool {
+		if e.Key() == tcell.KeyEnter && password.HasFocus() {
+			connect()
+			return true
+		}
+		return false
+	})
+}
+
+func (u *ui) openConnection(d *dialog, ctx context.Context, opts options, done func(*broker, error)) {
+	go func() {
+		candidate := &broker{options: opts}
+		err := candidate.open()
+		if !u.post(func() {
+			if d.closed || ctx.Err() != nil {
+				candidate.close()
+				return
+			}
+			if err != nil {
+				candidate.close()
+			}
+			done(candidate, err)
+		}) {
+			candidate.close()
+		}
+	}()
 }
 
 func (u *ui) connectionDialog(name string, saved connectionProfile, notice string) {
@@ -104,10 +269,10 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 	if starting && u.modalDepth == 1 {
 		d.cancel = stop
 	}
-	brokers := tview.NewInputField().SetLabel("Brokers").SetText(strings.Join(saved.Brokers, ", "))
-	profileName := tview.NewInputField().SetLabel("Profile name").SetText(name)
-	save := tview.NewCheckbox().SetLabel("Save profile").SetChecked(name != "")
-	remember := tview.NewCheckbox().SetLabel("Remember password")
+	brokers := tview.NewInputField().SetLabel(buttonLabel("Brokers", "Alt+A")).SetText(strings.Join(saved.Brokers, ", "))
+	profileName := tview.NewInputField().SetLabel(buttonLabel("Profile name", "Alt+N")).SetText(name)
+	save := tview.NewCheckbox().SetLabel(buttonLabel("Save profile", "Alt+V")).SetChecked(name != "")
+	remember := tview.NewCheckbox().SetLabel(buttonLabel("Remember password", "Alt+Y"))
 	credentials := &securityConfig{}
 	if saved.Security != nil {
 		credentials = saved.Security
@@ -134,11 +299,11 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 	ca := tview.NewInputField().SetLabel("CA certificate").SetText(credentials.CAFile)
 	cert := tview.NewInputField().SetLabel("Client certificate").SetText(credentials.CertFile)
 	key := tview.NewInputField().SetLabel("Client private key").SetText(credentials.KeyFile)
-	serverName := tview.NewInputField().SetLabel("TLS server name").SetText(credentials.ServerName)
-	username := tview.NewInputField().SetLabel("Username").SetText(credentials.SASL.Username)
-	password := tview.NewInputField().SetLabel("Password").SetMaskCharacter('•').SetText(credentials.SASL.Password)
+	serverName := tview.NewInputField().SetLabel(buttonLabel("TLS server name", "Alt+T")).SetText(credentials.ServerName)
+	username := tview.NewInputField().SetLabel(buttonLabel("Username", "Alt+U")).SetText(credentials.SASL.Username)
+	password := tview.NewInputField().SetLabel(buttonLabel("Password", "Alt+P")).SetMaskCharacter('•').SetText(credentials.SASL.Password)
 	mechanisms := []string{"SCRAM-SHA-256", "SCRAM-SHA-512", "PLAIN"}
-	mechanism := tview.NewDropDown().SetLabel("SASL mechanism").SetOptions(mechanisms, nil).
+	mechanism := tview.NewDropDown().SetLabel(buttonLabel("SASL mechanism", "Alt+M")).SetOptions(mechanisms, nil).
 		SetCurrentOption(indexOf(mechanisms, strings.ToUpper(credentials.SASL.Mechanism)))
 	mode := connectionPlain
 	switch {
@@ -151,7 +316,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 	case credentials.TLS || credentials.CAFile != "" || credentials.CertFile != "" || credentials.ServerName != "":
 		mode = connectionTLS
 	}
-	protocol := tview.NewDropDown().SetLabel("Security").SetOptions([]string{
+	protocol := tview.NewDropDown().SetLabel(buttonLabel("Security", "Alt+S")).SetOptions([]string{
 		"Plaintext", "TLS", "SASL + TLS", "SASL plaintext", "Client config file",
 	}, nil).SetCurrentOption(mode)
 
@@ -219,56 +384,46 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		}
 		opts.setCachePolicy()
 		rememberPassword := remember.IsChecked()
-		candidate := &broker{options: opts}
 		checking = true
 		connectButton.SetDisabled(true)
-		d.say("Checking connection settings…  Esc Cancel · q Quit")
-		go func() {
-			openErr := candidate.open()
-			if !u.post(func() {
-				if d.closed {
-					candidate.close()
-					return
-				}
-				checking = false
-				connectButton.SetDisabled(false)
-				if openErr != nil {
-					d.say(openErr.Error())
-					return
-				}
-				if storeProfile {
-					profiles, err := loadConnectionProfiles(opts.backend)
-					if err == nil && opts.profileName != name {
-						if _, exists := profiles[opts.profileName]; exists {
-							err = fmt.Errorf("a profile named %q already exists; open it from Clusters to edit it", opts.profileName)
-						}
-					}
-					if err == nil {
-						if name != "" && name != opts.profileName {
-							delete(profiles, name)
-						}
-						profiles[opts.profileName] = opts.connectionProfile(rememberPassword)
-						err = saveConnectionProfiles(opts.backend, profiles)
-					}
-					if err != nil {
-						candidate.close()
-						d.say("Saving profile: " + err.Error() + ". Uncheck Save profile to connect once.")
-						return
-					}
-				}
-				u.nextBroker = candidate
-				u.app.Stop()
-			}) {
-				candidate.close()
+		d.hint("Checking connection settings…  " + keyHint("Esc") + " Cancel · " + keyHint("q") + " Quit")
+		u.openConnection(d, u.ctx, opts, func(candidate *broker, openErr error) {
+			checking = false
+			connectButton.SetDisabled(false)
+			if openErr != nil {
+				d.say(openErr.Error())
+				return
 			}
-		}()
+			if storeProfile {
+				profiles, err := loadConnectionProfiles(opts.backend)
+				if err == nil && opts.profileName != name {
+					if _, exists := profiles[opts.profileName]; exists {
+						err = fmt.Errorf("a profile named %q already exists. Select it in Clusters and press e to edit it", opts.profileName)
+					}
+				}
+				if err == nil {
+					if name != "" && name != opts.profileName {
+						delete(profiles, name)
+					}
+					profiles[opts.profileName] = opts.connectionProfile(rememberPassword)
+					err = saveConnectionProfiles(opts.backend, profiles)
+				}
+				if err != nil {
+					candidate.close()
+					d.say("Saving profile: " + err.Error() + ". Uncheck Save profile to connect once.")
+					return
+				}
+			}
+			u.nextBroker = candidate
+			u.app.Stop()
+		})
 	}
-	connectButton = d.button("Connect Alt+G", connect)
-	cancelLabel := "Cancel Esc"
+	connectButton = d.button("Connect", "Alt+G", connect)
+	cancelLabel := "Cancel"
 	if starting && u.modalDepth == 1 {
-		cancelLabel = "Quit Esc"
+		cancelLabel = "Quit"
 	}
-	cancelButton := d.button(cancelLabel, d.cancel)
+	cancelButton := d.button(cancelLabel, "Esc", d.cancel)
 	browse := func(input *tview.InputField, title string) func() {
 		return func() {
 			if checking {
@@ -280,12 +435,12 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			})
 		}
 	}
-	browseConfig := d.button("Browse file", browse(config, "Choose Kafka connection settings"))
-	browseCA := d.button("Browse CA", browse(ca, "Choose CA certificate"))
-	browseCert := d.button("Browse cert", browse(cert, "Choose client certificate"))
-	browseKey := d.button("Browse key", browse(key, "Choose client private key"))
+	browseConfig := d.button("Browse file", "Alt+B", browse(config, "Choose Kafka connection settings"))
+	browseCA := d.button("Pick CA", "Alt+C", browse(ca, "Choose CA certificate"))
+	browseCert := d.button("Pick cert", "Alt+E", browse(cert, "Choose client certificate"))
+	browseKey := d.button("Pick key", "Alt+K", browse(key, "Choose client private key"))
 
-	render := func() {
+	render := func(saveProfile bool) {
 		focused, _ := form.GetFocusedItemIndex()
 		usesTLS := mode == connectionTLS || mode == connectionSASLTLS
 		usesSASL := mode == connectionSASLTLS || mode == connectionSASLPlain
@@ -309,7 +464,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			form.AddFormItem(mechanism).AddFormItem(username).AddFormItem(password)
 		}
 		form.AddFormItem(profileName).AddFormItem(save)
-		if usesSASL && save.IsChecked() {
+		if usesSASL && saveProfile {
 			form.AddFormItem(remember)
 		}
 		d.footer.Clear()
@@ -322,22 +477,26 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		} {
 			action.button.SetDisabled(!action.visible || checking && action.button != cancelButton)
 			if action.visible {
-				d.footer.AddItem(action.button, len(action.button.GetLabel())+2, 0, false)
+				d.footer.AddItem(action.button, tview.TaggedStringWidth(action.button.GetLabel())+2, 0, false)
 			}
 		}
 		if focused >= 0 {
 			focusForm(u, form, focused)
 		}
 	}
-	protocol.SetSelectedFunc(func(_ string, selected int) { mode = selected; render() })
+	protocol.SetSelectedFunc(func(_ string, selected int) { mode = selected; render(save.IsChecked()) })
 	save.SetChangedFunc(func(on bool) {
-		render()
+		render(on)
 		if on {
 			d.say("Saved profiles are local. Remember password stores it in the profile file.")
 		} else {
 			d.say("Connect once without saving.")
 		}
 	})
+	fieldShortcuts := map[rune]tview.FormItem{
+		'a': brokers, 's': protocol, 'n': profileName, 't': serverName,
+		'm': mechanism, 'u': username, 'p': password,
+	}
 	d.keymap(func(e *tcell.EventKey) bool {
 		if e.Key() == tcell.KeyCtrlC {
 			u.interrupted = true
@@ -356,9 +515,20 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		if checking {
 			return true
 		}
-		switch alt(e) {
+		shortcut := alt(e)
+		if item, ok := fieldShortcuts[shortcut]; ok {
+			focusForm(u, form, form.GetFormItemIndex(item.GetLabel()))
+			return true
+		}
+		switch shortcut {
 		case 'g':
 			connect()
+		case 'v':
+			save.SetChecked(!save.IsChecked())
+		case 'y':
+			if form.GetFormItemIndex(remember.GetLabel()) >= 0 {
+				remember.SetChecked(!remember.IsChecked())
+			}
 		case 'b':
 			if cli || mode == connectionFile {
 				browse(config, "Choose Kafka connection settings")()
@@ -380,10 +550,11 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		}
 		return true
 	})
-	render()
+	render(save.IsChecked())
 	u.app.SetFocus(form)
 	if notice == "" {
-		notice = "Enter host:port or comma-separated brokers. Tab moves between fields."
+		d.hint("Enter host:port or comma-separated brokers.  " + keyHint("Tab") + " Next field")
+	} else {
+		d.say(notice)
 	}
-	d.say(notice)
 }

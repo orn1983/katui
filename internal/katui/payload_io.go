@@ -236,7 +236,7 @@ func (p *payloadPane) exportValue() {
 		ctx, cancel = context.WithCancel(p.u.ctx)
 		writing = true
 		exportButton.SetDisabled(true)
-		d.say("Writing original bytes… Esc cancels.")
+		d.hint("Writing original bytes…  " + keyHint("Esc") + " Cancel")
 		go func() {
 			err := exportRecord(ctx, r, name)
 			cancel()
@@ -252,8 +252,8 @@ func (p *payloadPane) exportValue() {
 			})
 		}()
 	}
-	exportButton = d.button("Export Alt+E", export)
-	d.button("Back Esc", close)
+	exportButton = d.button("Export", "Alt+E", export)
+	d.button("Back", "Esc", close)
 	d.keymap(func(e *tcell.EventKey) bool {
 		if alt(e) == 'e' {
 			export()

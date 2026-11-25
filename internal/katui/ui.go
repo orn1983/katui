@@ -339,11 +339,15 @@ func (u *ui) savePosition() {
 	}
 }
 func (u *ui) changeWorkspace(w int) {
-	if w == 0 && u.b.backend == "cli" {
+	if (w == 0 || w == 2) && u.b.backend == "cli" {
+		message := "Topics require API backend"
+		if w == 2 {
+			message = "Messages require API backend"
+		}
 		if u.workspace == clustersWorkspace {
-			u.clusters.say("Topics require API backend")
+			u.clusters.say(message)
 		} else {
-			u.say("Topics require API backend")
+			u.say(message)
 		}
 		return
 	}
@@ -599,6 +603,10 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	case 'r':
 		u.requestRefresh()
 	case 'c':
+		if u.b.backend == "cli" {
+			u.say("Record reading requires API backend")
+			return nil
+		}
 		if u.workspace == 2 && u.readTopic != "" {
 			topic = u.readTopic
 		}
@@ -739,28 +747,46 @@ func (u *ui) openRow() {
 
 func (u *ui) updateControls(kind string) string {
 	k := keyHint
-	open, back, manage := k("Enter")+" Open", k("Esc")+" Back", k("a")+" Manage"
-	partitions, consume, consumers := k("Enter")+" Partition", k("c")+" Consume", k("g")+" Consumers"
-	sortRefresh := k("s") + " Sort  " + k("r") + " Refresh"
-	follow := tview.Escape("[ ] Follow")
-	if u.followLatest {
-		follow = "[black:" + u.accent.String() + ":b]" + tview.Escape("[x] Follow") + "[-:-:-]"
+	var actions []string
+	switch kind {
+	case "topics":
+		actions = []string{k("Enter") + " Open", k("g") + " Consumers", k("c") + " Consume", k("a") + " Manage", k("n") + " Create", k("d") + " Delete", k("h") + " Internal"}
+	case "topic", "topic-detail":
+		actions = []string{k("Esc") + " Back"}
+		if kind == "topic" {
+			actions = append(actions, k("Enter")+" Partition")
+		}
+		actions = append(actions, k("g")+" Consumers", k("c")+" Consume", k("a")+" Manage", k("d")+" Delete")
+	case "groups":
+		actions = []string{k("Enter") + " Open group"}
+		if u.b.backend == "api" {
+			actions = append(actions, k("a")+" Manage")
+		}
+		actions = append(actions, k("s")+" Sort", k("r")+" Refresh")
+	case "picker":
+		actions = []string{k("Esc") + " Back", k("Enter") + " Open group", k("/") + " Search", k("s") + " Sort", k("r") + " Refresh"}
+	case "group", "group-detail":
+		actions = []string{k("Esc") + " Back"}
+		if kind == "group" {
+			actions = append(actions, k("Enter")+" Partition")
+		}
+		if u.b.backend == "api" {
+			actions = append(actions, k("a")+" Manage", k("c")+" Consume")
+		}
+		if kind == "group" {
+			actions = append(actions, k("s")+" Sort")
+		} else {
+			actions = append(actions, k("r")+" Refresh")
+		}
+	case "messages":
+		follow := tview.Escape("[ ] Follow")
+		if u.followLatest {
+			follow = "[black:" + u.accent.String() + ":b]" + tview.Escape("[x] Follow") + "[-:-:-]"
+		}
+		actions = []string{k("Esc") + " Back", k("c") + " Consume", k("i") + " Records/Payload", k("p") + " Pause", k("x") + " Stop",
+			k("f") + " " + follow, k("z") + " Fullscreen", k("w") + " Compare", k("a") + " Select all", k("n") + " Unselect all"}
 	}
-	actions := map[string]string{
-		"topics":       strings.Join([]string{open, consumers, consume, manage, k("n") + " Create", k("d") + " Delete", k("h") + " Internal"}, "  "),
-		"topic":        strings.Join([]string{back, partitions, consumers, consume, manage, k("d") + " Delete"}, "  "),
-		"topic-detail": strings.Join([]string{back, consumers, consume, manage, k("d") + " Delete"}, "  "),
-		"groups":       open + " group  " + manage + "  " + sortRefresh,
-		"picker":       back + "  " + open + " group  " + k("/") + " Search  " + sortRefresh,
-		"group":        strings.Join([]string{back, partitions, manage, consume, k("s") + " Sort"}, "  "),
-		"group-detail": strings.Join([]string{back, manage, consume, k("r") + " Refresh"}, "  "),
-		"messages": strings.Join([]string{
-			back, consume, k("i") + " Records/Payload", k("p") + " Pause", k("x") + " Stop",
-			k("f") + " " + follow, k("z") + " Fullscreen", k("w") + " Compare",
-			k("a") + " Select all", k("n") + " Unselect all",
-		}, "  "),
-	}
-	controls := actions[kind]
+	controls := strings.Join(actions, "  ")
 	u.controls.SetText(controls)
 	return controls
 }
@@ -778,12 +804,15 @@ func (u *ui) refreshView() {
 		header += fmt.Sprintf("  ·  %s  ·  poll %s", safe(u.b.cluster, false), u.b.interval)
 	}
 	u.header.SetText(header)
-	labels := []string{"Topics", "Consumer Groups", "Messages", "Clusters"}
-	for i, label := range labels {
+	var labels []string
+	for i, label := range []string{"Topics", "Consumer Groups", "Messages", "Clusters"} {
+		if u.b.backend == "cli" && (i == 0 || i == 2) {
+			continue
+		}
 		if i == u.workspace {
 			label = "[black:" + u.accent.String() + ":b] " + label + " [-:-:-]"
 		}
-		labels[i] = keyHint(strconv.Itoa(i+1)) + " " + label
+		labels = append(labels, keyHint(strconv.Itoa(i+1))+" "+label)
 	}
 	u.tabs.SetText(strings.Join(labels, "  "))
 	if u.workspace == clustersWorkspace {

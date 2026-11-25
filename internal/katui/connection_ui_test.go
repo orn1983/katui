@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,32 @@ func clusterKey(t *testing.T, screen tcell.Screen, key tcell.Key, char rune, mod
 	if err := screen.PostEvent(tcell.NewEventKey(key, char, modifiers)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestCLIGroupNavigation(t *testing.T) {
+	// An empty CLI group listing is sufficient to exercise the workspace.
+	command, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("requires the true utility")
+	}
+	u, screen, _ := startClusterUI(t, nil, "--backend", "cli", "--kafka-cli", command, "-b", "127.0.0.1:1")
+	u.post(func() {
+		tabs := u.tabs.GetText(true)
+		if !strings.Contains(tabs, "Consumer Groups") || !strings.Contains(tabs, "Clusters") ||
+			strings.Contains(tabs, "Topics") || strings.Contains(tabs, "Messages") {
+			t.Errorf("unexpected CLI workspace labels: %q", tabs)
+		}
+		for _, kind := range []string{"groups", "group", "group-detail"} {
+			labels := u.updateControls(kind)
+			if strings.Contains(labels, "Manage") || strings.Contains(labels, "Consume") {
+				t.Errorf("%s advertises unsupported CLI actions: %q", kind, labels)
+			}
+		}
+	})
+	clusterKey(t, screen, tcell.KeyRune, '3', 0)
+	waitKeyboardState(t, u, "CLI Messages shortcut opened a reader", func() bool {
+		return u.workspace == 1 && strings.Contains(u.message, "Messages require API backend")
+	})
 }
 
 func waitClusterSelection(t *testing.T, u *ui, done <-chan struct{}, name, address string) {

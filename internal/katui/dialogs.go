@@ -319,9 +319,13 @@ func (u *ui) palette() {
 	d := u.dialog("Help & Commands", list, list)
 	d.hint(keyHint("Enter") + " Run selected command  " + keyHint("Esc") + " Back")
 	add := func(label string, key rune, fn func()) { list.AddItem(label, "", key, func() { d.close(); fn() }) }
-	add("Topics", '1', func() { u.changeWorkspace(0) })
+	if u.b.backend != "cli" {
+		add("Topics", '1', func() { u.changeWorkspace(0) })
+	}
 	add("Consumer Groups", '2', func() { u.changeWorkspace(1) })
-	add("Messages", '3', func() { u.changeWorkspace(2) })
+	if u.b.backend != "cli" {
+		add("Messages", '3', func() { u.changeWorkspace(2) })
+	}
 	add("Refresh monitoring", 'r', u.requestRefresh)
 	add("Kafka clusters", '4', u.showClusters)
 	if u.workspace == 2 && len(u.records) > 0 {

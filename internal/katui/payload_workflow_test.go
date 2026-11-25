@@ -381,6 +381,7 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	u.post(func() {
 		p.focusViewer()
 		p.viewer.selectBy(p.viewer.match[0], false)
+		p.viewer.setMode(payloadSelection)
 		p.viewer.selectBy(p.viewer.match[1], true)
 	})
 	var left, anchor, cursor, pan int
@@ -408,6 +409,10 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("y did not copy the selected search result")
 	}
+	waitFor("y did not leave Selection mode in Fullscreen", func() bool {
+		return p.viewer.mode == payloadCursor && p.viewer.cursor == cursor &&
+			p.viewer.selectedText() == "" && p.viewer.left == left-pan
+	})
 }
 
 func TestPayloadTextPansWithoutChangingSelection(t *testing.T) {

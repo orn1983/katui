@@ -367,6 +367,15 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 				v.setMode(payloadSelection)
 			}
 		}
+		// Map these after Shift+arrow handling so a shifted '$' only moves the cursor.
+		if v.mode != payloadScroll {
+			switch letter {
+			case '0':
+				key = tcell.KeyHome
+			case '$':
+				key = tcell.KeyEnd
+			}
+		}
 		if v.mode == payloadScroll {
 			switch {
 			case key == tcell.KeyUp || letter == 'k':

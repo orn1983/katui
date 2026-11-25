@@ -134,9 +134,9 @@ func (p *payloadPane) updateNavigation() {
 	line := "Scroll · " + k("Arrows") + " Scroll  " + k("Space") + " Cursor"
 	switch mode {
 	case payloadCursor:
-		line = "Cursor · " + k("Arrows") + " Move  " + k("v") + " Select"
+		line = "Cursor · " + k("Arrows") + " Move  " + k("0/$") + " Line  " + k("v") + " Select"
 	case payloadSelection:
-		line = "Selection · " + k("Arrows") + " Extend  " + k("v") + " Cursor"
+		line = "Selection · " + k("Arrows") + " Extend  " + k("0/$") + " Line"
 	}
 	p.navigation.SetText(line + "  " + k("y") + " Yank\n" + k("Alt+←/→") + " Pan 8  " + k("Ctrl+←/→") + " Pan half  " + k("Esc") + " Back")
 }
@@ -718,8 +718,12 @@ func (p *payloadPane) shortcut(key rune) bool {
 		p.editProfile(false)
 	case 'y':
 		for _, view := range []*payloadText{p.viewer, p.nodeView} {
-			if view.HasFocus() && view.anchor != view.cursor {
+			if view.HasFocus() && (view.mode == payloadSelection || view.anchor != view.cursor) {
 				view.copy(view.selectedText())
+				if view.mode == payloadSelection {
+					view.anchor = view.cursor
+					view.exitMode()
+				}
 				return true
 			}
 		}

@@ -96,13 +96,38 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 	wait("h did not move the cursor left", func() bool { return p.viewer.cursor == 0 && p.viewer.anchor == 0 })
 	clusterKey(t, screen, tcell.KeyRight, 0, 0)
 	clusterKey(t, screen, tcell.KeyRune, 'v', 0)
-	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
-	wait("v did not enable Selection mode", func() bool {
-		return p.viewer.mode == payloadSelection && p.viewer.anchor == 1 && p.viewer.cursor == 2
+	clusterKey(t, screen, tcell.KeyRune, '$', tcell.ModShift)
+	wait("$ did not extend the selection to the end of the line", func() bool {
+		return p.viewer.mode == payloadSelection && p.viewer.selectedText() == "1,"
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'y', 0)
+	checkClipboard("1,")
+	wait("y did not clear the selection and return to Cursor mode", func() bool {
+		return p.viewer.mode == payloadCursor && p.viewer.cursor == 3 && p.viewer.anchor == 3
+	})
+	clusterKey(t, screen, tcell.KeyRune, '0', 0)
+	wait("0 did not move the cursor to the start of the line", func() bool {
+		return p.viewer.mode == payloadCursor && p.viewer.cursor == 0 && p.viewer.anchor == 0
+	})
+	clusterKey(t, screen, tcell.KeyRune, '$', tcell.ModShift)
+	wait("$ did not move to the end of the line in Cursor mode", func() bool {
+		return p.viewer.mode == payloadCursor && p.viewer.cursor == 3 && p.viewer.anchor == 3
 	})
 	clusterKey(t, screen, tcell.KeyRune, 'v', 0)
+	clusterKey(t, screen, tcell.KeyRune, '0', 0)
+	wait("0 did not extend the selection back to the start of the line", func() bool {
+		return p.viewer.mode == payloadSelection && p.viewer.cursor == 0 && p.viewer.selectedText() == "[1,"
+	})
 	clusterKey(t, screen, tcell.KeyRune, 'y', 0)
-	checkClipboard("1")
+	checkClipboard("[1,")
+	clusterKey(t, screen, tcell.KeyRune, 'v', 0)
+	wait("v did not start a new, empty selection", func() bool {
+		return p.viewer.mode == payloadSelection && p.viewer.selectedText() == ""
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'y', 0)
+	wait("y with an empty visual selection did not return to Cursor mode", func() bool {
+		return p.viewer.mode == payloadCursor && p.viewer.selectedText() == ""
+	})
 	clusterKey(t, screen, tcell.KeyRune, 'g', 0)
 	checkClipboard(value)
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)

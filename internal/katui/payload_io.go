@@ -45,7 +45,7 @@ func deliverClipboard(ctx context.Context, text, localCommand string, terminal f
 
 func (p *payloadPane) copyText(text string) {
 	if text == "" {
-		p.notice("Select text with Space then v, Shift+arrows, or a mouse drag")
+		p.notice("No text selected. Use Shift+arrows or a mouse drag.")
 		return
 	}
 	go p.sendClipboard(text)

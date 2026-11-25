@@ -134,7 +134,13 @@ func (p *payloadPane) copyView() {
 		return
 	}
 	if !p.metadataTab && p.result.incomplete {
-		p.notice("Rendered view is incomplete. Use Load full, Copy Value, or select the displayed text.")
+		hint := "Rendered view is incomplete. Use Copy Value or select the displayed text."
+		if !p.full {
+			hint = "Rendered view is incomplete. Press z for Fullscreen, use Copy Value, or select the displayed text."
+		} else if p.canLoadFull() {
+			hint = "Rendered view is incomplete. Press Alt+L to load more, use Copy Value, or select the displayed text."
+		}
+		p.notice(hint)
 		return
 	}
 	text := p.result.text

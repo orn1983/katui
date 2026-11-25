@@ -2,35 +2,37 @@
 
 Katui is a Go terminal application for browsing Kafka topics, monitoring consumer groups, reading records, inspecting payloads, and reviewing Kafka administration changes.
 
-## Build
+## Build and install
 
-Use Go 1.26.11 or newer. From the repository root:
+Use Go 1.26.11 or newer. Run `make` from the repository root to build `bin/katui`.
 
 ```sh
-go build -o katui .
-./katui -b localhost:9092
+make
+./bin/katui
 ```
+
+`make install` builds and installs Katui to `$HOME/.local/bin/katui`. Add `$HOME/.local/bin` to your `PATH` to run `katui` from any directory. Set `PREFIX` to choose another installation prefix, or `BINDIR` to choose the executable directory directly. For packaging, `DESTDIR` stages the install under a temporary root.
 
 The executable entry point is `main.go`. Kafka operations, the terminal UI, and their tests live in `internal/katui`. Kafka requests and record decoding use franz-go, the terminal UI uses tview and tcell, and local Protobuf support uses protocompile and the Go Protobuf runtime.
 
 ## Connect
 
-Run `./katui` to choose a saved cluster. Use ↑ and ↓ to select a profile, then press Enter or `c` to connect directly. Press `e` to edit the selected profile or `n` to open **Connect to Kafka** for a new one. If a saved profile needs a session password, Katui prompts for the password and Enter connects. Press `4` or choose **Kafka clusters** from Help & Commands (`?`) to open the Clusters workspace. From there, press `1`, `2`, or `3` to switch directly, or Esc to return to the previous workspace. Connecting to another cluster stops the current reader and opens a fresh view.
+Run `./bin/katui` with no broker arguments to open connection setup or choose a saved cluster. Use ↑ and ↓ to select a profile, then press Enter or `c` to connect directly. Press `e` to edit the selected profile or `n` to open **Connect to Kafka** for a new one. If a saved profile needs a session password, Katui prompts for it and Enter connects. Press `4` or choose **Kafka clusters** from Help & Commands (`?`) to open the Clusters workspace. From there, press `1`, `2`, or `3` to switch directly, or Esc to return to the previous workspace. Connecting to another cluster stops the current reader and opens a fresh view.
 
-With no saved profiles, **Connect to Kafka** opens automatically. Press Alt+A to focus broker addresses or Alt+S for security. Use `c` to connect when outside an input, Alt+C while typing, or Enter on the Connect button. Choose plaintext, TLS, SASL with TLS, SASL plaintext with SCRAM, or an existing client-config JSON file.
+With no saved profiles, **Connect to Kafka** opens automatically. Press Alt+A to focus broker addresses or Alt+S for security in the API backend. Use `c` to connect when outside an input, Alt+C while typing, or Enter on the Connect button. Choose plaintext, TLS, SASL with TLS, SASL plaintext with SCRAM, or an existing client-config JSON file. The setup buttons open a file browser for TLS credentials and connection files.
 
 Choose **Save profile** and enter a name to keep the settings. With SASL, the profile asks for the password at the next connection unless you also select **Remember password**. A remembered password is written to the local profile JSON with private file permissions. Imported client configuration and TLS files are referenced by path. Profiles live in `$XDG_CONFIG_HOME/katui/connections.json`, falling back to `~/.config/katui/connections.json`. The CLI backend uses `cli-connections.json`.
 
-Use `-b` to supply broker addresses directly or `--cluster NAME` to select a saved profile. `--once` requires one of these options and a complete configuration. While a connection is pending, Esc cancels it, `r` retries from the main view, and `q` opens quit confirmation. Kafka clients need network access to the advertised broker addresses as well as the bootstrap address.
+Use `-b` to supply broker addresses directly or `--cluster NAME` to select a saved profile. `--once` requires one of these options and a complete configuration. Esc cancels a pending connection. From the main view, `r` retries monitoring and `q` opens quit confirmation. Kafka clients need network access to the advertised broker addresses as well as the bootstrap address.
 
 Inspector preferences are keyed by the set of bootstrap addresses and the topic. When moving from an earlier Katui build, pass the same broker addresses with `-b` to reuse its saved profiles.
 
 ```sh
-./katui -b broker.example.net:9092 -i 2
-./katui -b broker.example.net:9092 -t orders -p 1
-./katui -b broker.example.net:9092 -g billing -t orders
-./katui -b broker.example.net:9092 --once -g billing
-./katui -b broker.example.net:9092 --once -t orders
+./bin/katui -b broker.example.net:9092 -i 2
+./bin/katui -b broker.example.net:9092 -t orders -p 1
+./bin/katui -b broker.example.net:9092 -g billing -t orders
+./bin/katui -b broker.example.net:9092 --once -g billing
+./bin/katui -b broker.example.net:9092 --once -t orders
 ```
 
 `--help` prints the available options. Interactive mode uses terminal stdin and stdout. `--once` writes JSON and can be redirected. Without a group or topic, its output is a list of group names.
@@ -56,7 +58,7 @@ Pass a JSON file with `--client-config`. Omit fields you do not use. TLS uses sy
 ### Kafka CLI backend
 
 ```sh
-./katui --backend cli -b localhost:9092 \
+./bin/katui --backend cli -b localhost:9092 \
   --kafka-cli /opt/kafka/bin/kafka-consumer-groups.sh \
   --command-config /path/to/connection.properties
 ```
@@ -65,22 +67,27 @@ The CLI backend supports consumer-group monitoring. The executable can also be o
 
 ## Use
 
-- `1` opens Topics, `2` opens Consumer Groups, `3` opens Messages, and `4` opens Clusters. `/` searches, Enter opens or activates the focused item, and Esc goes back or cancels. Tab and Shift+Tab move focus. `?` or Ctrl+P opens Help & Commands, which includes the keyboard reference.
-- Lists, viewers, and dialog buttons use the highlighted lowercase action letters. While typing in a dialog field, use Alt plus the action letter or Tab to the button and press Enter. Field shortcuts labeled Alt jump to fields or toggle options.
-- In a topic or partition, `c` opens Consume. Space checks partitions, `a` selects all, and `n` clears the selection. Choose a start position and use **Keep following** to keep receiving new records. Press Alt+C to start consuming from the partition list or while typing in a filter.
+- `1` opens Topics, `2` opens Consumer Groups, `3` opens Messages, and `4` opens Clusters. `/` searches, Enter opens or activates the focused item, and Esc goes back or cancels. Tab and Shift+Tab move focus. From a workspace or payload dialog, `?` or Ctrl+P opens Help & Commands. Choose **Keyboard shortcuts** or press `?` again to open the reference.
+- Lists, viewers, and dialog buttons use the highlighted action keys. While typing, use the indicated Alt shortcuts or Tab to the button and press Enter.
+- In a topic or partition, `c` opens Consume. Space toggles a partition, `a` selects all, and `n` clears the selection. Choose **Live/end**, **Recent offsets**, **Retained beginning**, **Timestamp**, or **Exact offset**. **Keep following** controls whether the reader waits for new records after reaching the captured end offsets. Press Alt+C to start consuming from the partition list or while typing in a filter.
 - Choose **Exact offset** from Start and enter a nonnegative offset. Katui uses it inclusively in each selected partition. Select one partition to address a specific record. Katui reports the partition and available range if the requested offset is outside it. If the offset falls in a gap, reading begins at the next available record. An offset equal to the end starts an empty snapshot or follows new arrivals.
 - In Messages, `i` toggles between records and the payload inspector. Enter on a record or Tab also enters the inspector. `b` returns to records and `m` opens the format picker. With the record list focused, Space toggles the current record. `a` selects all visible records up to the checked-record limits, and `n` clears the entire selection. `w` compares checked records and `z` toggles Fullscreen. **Clear message buffer** is in Commands.
 - Messages stays on the current record as new records arrive. Press `f` to follow the newest visible record. The **Follow** checkbox shows the current mode.
 - The record reader uses partition fetches without group membership or offset commits. Kafka offsets are positions, so retained-count and rate displays are estimates.
 - Topic administration is under `a`, `n`, and `d`. Group administration is under `a`. `r` opens Review. Type the exact target name, then press Enter to focus Apply and Enter again to apply. Alt+A also activates Apply after the target matches. Kafka writes make one request after revalidation. A timeout or partial response may have changed state and requires a fresh review.
-- Preferences live under `$XDG_CONFIG_HOME/katui/inspectors.json`, or `~/.config/katui/inspectors.json`. Use `--inspector-config` to select a preferences file. Local monitoring snapshots are disabled by `--no-cache` and whenever a connection configuration file is supplied.
+- Preferences live under `$XDG_CONFIG_HOME/katui/inspectors.json`, or `~/.config/katui/inspectors.json`. Use `--inspector-config` to select a preferences file. Local monitoring snapshots are stored under `$XDG_CACHE_HOME/katui/` or `~/.cache/katui/`. Katui skips the cache with `--no-cache`, custom security settings, or an API, disk, or CLI connection file.
+
+### Monitor consumer rates
+
+Open a group with Enter and press Enter on a partition to inspect its lag, owner, offsets, and consumption chart. Blank columns in the chart indicate missing samples. A flat line indicates a measured rate of zero. **Offset discontinuities** counts samples where the committed offset or log end moved backward. Katui resets the affected rate history and lag baseline when that happens.
 
 ### Inspect, copy, and export payloads
 
+- Use `m` to pick Raw, JSON formatted text or tree, CSV table or pivot, or Protobuf JSON or tree. In CSV, `d` sets the delimiter, Alt+H toggles the header row, and `o` sets column names. In Protobuf, `u` opens the schema editor. Load a `.proto` or descriptor set (`.pb`, `.desc`, or `.protoset`), then choose a message type and wire format and apply.
 - Fullscreen defaults to 2 MiB of structured input and 8 MiB of rendered text. Set `--structured-input-mib` and `--rendered-output-mib` to choose limits from 1 to 128 MiB. When the larger limits can reveal more, press Alt+L and then Enter to confirm in place. This raises both limits to 128 MiB for JSON, CSV, Protobuf, or raw text. Esc cancels the prompt or a running load and keeps Fullscreen open. Some decoder calls finish in the background after cancellation.
 - Press `/` in the inspector or comparison to open payload search in Fullscreen. From Fullscreen, `/` focuses search, and `n` or `p` move through matches. Fullscreen keeps at most 10,000 matches and one million text lines. CSV displays at most 50,000 rows and 256 columns. Trees display at most 50,000 nodes and 128 levels per record. The view reports when a limit is reached.
 - Messages shows temporary storage usage and marks each record **Complete** or **Preview only**. Set `--payload-storage-mib` to change the default 128 MiB quota per instance. `0` disables temporary storage while keeping inline values and previews. A warning appears when a value cannot fit. Katui cleans up temporary payloads on normal exit.
-- Payload text starts in Scroll mode. Left/Right pan eight columns, Up/Down scroll four rows, and Page Up/Down move by a page. Space enters Cursor mode for character-by-character movement. In Cursor mode, `v` starts Selection, where arrows extend or shrink the selection. In either mode, `0` moves to the start of the current line and `$` moves to its end. Press `v` again or Esc to return to Cursor and keep the selection. Space returns to Scroll from either mode. Entering Cursor or Selection in the inspector pins the current record while the reader continues. Press `f` to follow the newest record again.
+- Payload text starts in Scroll mode. Left/Right pan eight columns, Up/Down scroll four rows, and Page Up/Down move by a page. `h`, `j`, `k`, and `l` work like Left, Down, Up, and Right. Space enters Cursor mode for character-by-character movement. In Cursor mode, `v` starts Selection, where arrows extend or shrink the selection. In either mode, `0` moves to the start of the current line and `$` moves to its end. Press `v` again or Esc to return to Cursor and keep the selection. Space returns to Scroll from either mode. Entering Cursor or Selection in the inspector pins the current record while the reader continues. Press `f` to follow the newest record again.
 - Alt+Left/Right pan eight columns in any mode. Ctrl+Left/Right pan half the visible width, with a minimum of eight columns. Drag with the mouse, hold Shift while using the arrows, or use Ctrl+A to select all displayed text. Press Ctrl+C to copy selected text. In Selection mode, `y` copies the selected text, clears the highlight, and returns to Cursor. In Scroll or Cursor, `y` copies any selected text or the rendered view. In a tree, Left/Right collapse and expand nodes. Tab or click focuses the selected node’s text for scrolling, selection, and copying.
 - `g` runs **Copy Value** for the complete retained text. `.` runs **Copy View** for the rendered text. Both are also available in Help & Commands (`?`) and report an error if their source is incomplete. `s` saves a complete retained value byte for byte, including binary values. From a comparison, choose a record first. Type a new path on the machine running Katui and press Enter to save.
 - Local macOS uses `pbcopy` when available. SSH and the fallback use terminal clipboard transfer (OSC 52), which requires terminal or multiplexer support and has a 64 KiB limit in Katui. Use Export for larger copies over SSH or binary payloads.
@@ -93,10 +100,10 @@ go vet ./...
 govulncheck ./...
 ```
 
-The default suite covers large payloads, temporary storage, clipboard paths, changed administration reviews, partial replies, timeouts, and snapshot recovery after reconnecting. The Kafka integration test is opt-in. Use a disposable cluster and credentials with permissions to create, configure, produce to, and delete temporary topics and manage temporary test groups.
+The default suite covers large payloads, temporary storage, clipboard paths, changed administration reviews, partial replies, timeouts, and snapshot recovery after reconnecting. The tests that require a Kafka broker are opt-in. Use a disposable cluster and credentials with permissions to create, configure, produce to, and delete temporary topics and manage temporary test groups.
 
 ```sh
 KATUI_TEST_BROKER=localhost:9092 go test -race ./...
 ```
 
-The test checks validate-only topic creation, finite filtered reading with a retained large payload, unchanged group commits after reading, timestamp reset with a missing-timestamp fallback, rejection of a stale reset review, staged configuration, classic group rebalance, and topic and group deletion.
+These tests cover validate-only topic creation, finite filtered reading with a retained large payload, unchanged group commits after reading, timestamp reset with a missing-timestamp fallback, rejection of a stale reset review, staged configuration, classic group rebalance, and topic and group deletion.

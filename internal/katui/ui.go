@@ -405,13 +405,11 @@ func (u *ui) back() {
 }
 
 func (u *ui) viewerKeys(event *tcell.EventKey, table *tview.Table, view *tview.TextView) *tcell.EventKey {
-	if event.Key() == tcell.KeyRune {
-		switch event.Rune() {
-		case 'j':
-			return tcell.NewEventKey(tcell.KeyDown, 0, 0)
-		case 'k':
-			return tcell.NewEventKey(tcell.KeyUp, 0, 0)
-		}
+	switch shortcutRune(event) {
+	case 'j':
+		return tcell.NewEventKey(tcell.KeyDown, 0, 0)
+	case 'k':
+		return tcell.NewEventKey(tcell.KeyUp, 0, 0)
 	}
 	if event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyRight {
 		delta := 8
@@ -489,21 +487,21 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	if u.modalDepth > 0 {
 		return ev
 	}
-	if u.inspector != nil && u.workspace == 2 && u.inspector.mode.IsOpen() {
-		return ev
-	}
 	if ev.Key() == tcell.KeyCtrlP {
 		u.palette()
 		return nil
 	}
 	if u.workspace == clustersWorkspace {
-		if ev.Key() == tcell.KeyRune && ev.Modifiers() == 0 {
-			switch ev.Rune() {
+		if key := shortcutRune(ev); key != 0 {
+			switch key {
 			case '1', '2', '3':
-				u.changeWorkspace(int(ev.Rune() - '1'))
+				u.changeWorkspace(int(key - '1'))
 				return nil
 			case '?':
 				u.help()
+				return nil
+			case ':':
+				u.palette()
 				return nil
 			}
 		}
@@ -528,7 +526,8 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.fullRecord()
 		return nil
 	}
-	if ev.Key() != tcell.KeyRune || ev.Modifiers()&tcell.ModAlt != 0 {
+	key := shortcutRune(ev)
+	if key == 0 {
 		return ev
 	}
 	row := u.selected()
@@ -541,15 +540,23 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	if row.group != "" {
 		group = row.group
 	}
-	switch ev.Rune() {
+	switch key {
 	case '1', '2', '3':
-		u.changeWorkspace(int(ev.Rune() - '1'))
+		u.changeWorkspace(int(key - '1'))
 	case '/':
+		if u.workspace == 2 && u.inspector != nil && u.inspector.root.HasFocus() {
+			if p := u.fullRecord(); p != nil {
+				u.app.SetFocus(p.search)
+			}
+			return nil
+		}
 		u.fullscreen = ""
 		u.refreshView()
 		u.focus(u.search)
 	case '4':
 		u.showClusters()
+	case ':':
+		u.palette()
 	case 'q':
 		u.quit()
 	case '?':
@@ -573,10 +580,11 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		}
 		u.focus(u.mainPane())
 	case 's':
-		if u.workspace != 2 {
-			loc.sort++
-			u.refreshView()
+		if u.workspace == 2 {
+			return u.messageKeys(ev)
 		}
+		loc.sort++
+		u.refreshView()
 	case 'r':
 		u.requestRefresh()
 	case 'c':
@@ -594,7 +602,7 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		if u.workspace == 2 {
 			return u.messageKeys(ev)
 		}
-		switch ev.Rune() {
+		switch key {
 		case 'h':
 			if loc.kind == "topics" {
 				u.showInternal = !u.showInternal
@@ -648,10 +656,8 @@ func (u *ui) cycleFocus(reverse bool) {
 			} else {
 				u.focus(u.search)
 			}
-		} else if reverse {
-			u.inspector.focusLast()
 		} else {
-			u.inspector.focusFirst()
+			u.inspector.focusViewer()
 		}
 	} else {
 		u.focus(u.search)
@@ -717,10 +723,12 @@ func (u *ui) openRow() {
 	case "group":
 		u.push(&location{kind: "group-detail", group: row.group, topic: row.topic, partition: row.partition})
 	case "messages":
-		if len(u.checked) > 1 {
-			u.comparison()
-		} else if u.inspector != nil {
-			u.inspector.focusFirst()
+		if u.inspector != nil {
+			if u.fullscreen == "table" {
+				u.fullscreen = ""
+				u.refreshView()
+			}
+			u.inspector.focusViewer()
 		}
 	}
 }
@@ -765,7 +773,7 @@ func (u *ui) refreshView() {
 		"picker":       back + "  " + open + " group  " + k("/") + " Search  " + sortRefresh,
 		"group":        strings.Join([]string{back, partitions, manage, consume, k("s") + " Sort"}, "  "),
 		"group-detail": strings.Join([]string{back, manage, consume, k("r") + " Refresh"}, "  "),
-		"messages":     strings.Join([]string{back, consume, k("p") + " Pause", k("x") + " Stop", k("l") + " Clear", k("f") + " Follow", k("w") + " Compare", k("e") + " Uncheck"}, "  "),
+		"messages":     strings.Join([]string{back, consume, k("p") + " Pause", k("x") + " Stop", k("f") + " Follow", k("F4") + " Full", k("w") + " Compare", k("e") + " Uncheck"}, "  "),
 	}
 	controls := actions[loc.kind]
 	u.controls.SetText(controls)

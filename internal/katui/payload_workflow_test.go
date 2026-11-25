@@ -309,6 +309,11 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	}
 	waitFor("default render did not reach the size warning", func() bool { return !p.rendering && p.result.canExpand })
 	u.post(func() {
+		if !p.viewer.HasFocus() {
+			t.Error("Full view did not open on the payload text")
+		}
+	})
+	u.post(func() {
 		p.copyView()
 		if !strings.Contains(p.dialog.status.GetText(false), "Rendered view is incomplete") {
 			t.Error("Copy View did not explain why it refused the truncated view")
@@ -317,20 +322,29 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	u.post(func() {
 		p.refresh()
 		p.dialog.cancel()
-		if p.rendering || p.renderCancel != nil || p.dialog.closed || !p.result.incomplete {
+		if p.rendering || p.renderCancel != nil || p.dialog.closed || !p.result.incomplete || !p.loadCanceled {
 			t.Error("Esc did not cancel just the loading operation")
 		}
 	})
-	u.post(p.loadFull)
+	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
+	waitFor("retry did not restore the original preview", func() bool { return !p.rendering && p.canLoadFull() })
+	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
+	waitFor("load confirmation was not shown inline", func() bool {
+		return !p.expanded && !p.rendering && p.confirmLoad != nil && u.modalDepth == 1 && p.viewer.doc.text != ""
+	})
+	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
+	waitFor("Esc did not restore the payload after canceling the prompt", func() bool {
+		return p.confirmLoad == nil && !p.expanded && p.viewer.HasFocus() && u.modalDepth == 1 && p.viewer.doc.text != ""
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
+	waitFor("load confirmation did not reopen", func() bool { return p.confirmLoad != nil })
+	clusterKey(t, screen, tcell.KeyEnter, 0, 0)
+	waitFor("confirmed full render was truncated", func() bool { return p.expanded && !p.rendering && !p.result.incomplete })
 	u.post(func() {
-		if p.expanded || u.modalDepth != 2 {
-			t.Error("load started before confirmation")
+		if !p.loadButton.IsDisabled() || p.dialog.footer.GetItemCount() != len(p.dialog.buttons)-1 {
+			t.Error("Load full was still offered after the full payload finished")
 		}
 	})
-	if err := screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'y', 0)); err != nil {
-		t.Fatal(err)
-	}
-	waitFor("confirmed full render was truncated", func() bool { return p.expanded && !p.rendering && !p.result.incomplete })
 	u.post(func() { p.search.SetText(marker) })
 	waitFor("search did not jump past the old display boundary", func() bool {
 		return p.viewer.match[0] > maxRenderedPayload && p.viewer.left > maxRenderedPayload

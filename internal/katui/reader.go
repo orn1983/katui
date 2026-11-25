@@ -302,15 +302,15 @@ func (u *ui) consume(topic string, id int32) {
 		u.refreshView()
 		u.focus(u.table)
 	}
-	d.button("All", "Alt+A", func() { selector.every(true) })
-	d.button("None", "Alt+N", func() { selector.every(false) })
+	d.button("All", "a", func() { selector.every(true) })
+	d.button("None", "n", func() { selector.every(false) })
 	ctx, cancel := context.WithTimeout(u.ctx, u.b.timeout)
 	d.cancel = func() {
 		cancel()
 		d.close()
 	}
 	d.button("Cancel", "Esc", d.cancel)
-	goBtn := d.button("Go", "Alt+G", goRead).SetDisabled(true)
+	goBtn := d.button("Start", "c", goRead).SetDisabled(true)
 	d.keymap(func(e *tcell.EventKey) bool {
 		if loading && e.Key() == tcell.KeyRune && e.Rune() == 'q' && e.Modifiers() == 0 && !isEditing(u.app.GetFocus()) {
 			d.cancel()
@@ -320,10 +320,6 @@ func (u *ui) consume(topic string, id int32) {
 		switch a := alt(e); a {
 		case 'p':
 			u.app.SetFocus(selector.list)
-		case 'a':
-			selector.every(true)
-		case 'n':
-			selector.every(false)
 		case 'g':
 			goRead()
 		default:

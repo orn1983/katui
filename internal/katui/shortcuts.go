@@ -23,3 +23,21 @@ func buttonLabel(label, key string) string {
 func shortcutStyle() tcell.Style {
 	return tcell.StyleDefault.Foreground(tcell.GetColor(shortcutForeground)).Background(tcell.GetColor(shortcutBackground)).Bold(true)
 }
+
+func shortcutRune(event *tcell.EventKey) rune {
+	if event.Key() == tcell.KeyRune && event.Modifiers()&^tcell.ModShift == 0 {
+		return event.Rune()
+	}
+	return 0
+}
+
+func (u *ui) newList() *tview.List {
+	list := tview.NewList().SetShortcutStyle(shortcutStyle())
+	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if shortcutRune(event) == ' ' {
+			return nil
+		}
+		return u.viewerKeys(event, nil, nil)
+	})
+	return list
+}

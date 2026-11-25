@@ -36,7 +36,7 @@ func (u *ui) showClusters() {
 	}
 
 	names := sortedKeys(profiles)
-	list := tview.NewList().SetHighlightFullLine(true).
+	list := u.newList().SetHighlightFullLine(true).
 		SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(u.accent).Bold(true))
 	var d *dialog
 	if starting {
@@ -182,10 +182,6 @@ func (u *ui) showClusters() {
 		switch e.Rune() {
 		case 'c':
 			connect()
-		case 'e':
-			edit()
-		case 'n':
-			newConnection()
 		default:
 			return false
 		}
@@ -321,7 +317,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 	ca := tview.NewInputField().SetLabel("CA certificate").SetText(credentials.CAFile)
 	cert := tview.NewInputField().SetLabel("Client certificate").SetText(credentials.CertFile)
 	key := tview.NewInputField().SetLabel("Client private key").SetText(credentials.KeyFile)
-	serverName := tview.NewInputField().SetLabel(buttonLabel("TLS server name", "Alt+T")).SetText(credentials.ServerName)
+	serverName := tview.NewInputField().SetLabel(buttonLabel("TLS server name", "Alt+H")).SetText(credentials.ServerName)
 	username := tview.NewInputField().SetLabel(buttonLabel("Username", "Alt+U")).SetText(credentials.SASL.Username)
 	password := tview.NewInputField().SetLabel(buttonLabel("Password", "Alt+P")).SetMaskCharacter('•').SetText(credentials.SASL.Password)
 	mechanisms := []string{"SCRAM-SHA-256", "SCRAM-SHA-512", "PLAIN"}
@@ -440,7 +436,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			u.app.Stop()
 		})
 	}
-	connectButton = d.button("Connect", "Alt+G", connect)
+	connectButton = d.button("Connect", "c", connect)
 	cancelLabel := "Cancel"
 	if starting && u.modalDepth == 1 {
 		cancelLabel = "Quit"
@@ -457,10 +453,10 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			})
 		}
 	}
-	browseConfig := d.button("Browse file", "Alt+B", browse(config, "Choose Kafka connection settings"))
-	browseCA := d.button("Pick CA", "Alt+C", browse(ca, "Choose CA certificate"))
-	browseCert := d.button("Pick cert", "Alt+E", browse(cert, "Choose client certificate"))
-	browseKey := d.button("Pick key", "Alt+K", browse(key, "Choose client private key"))
+	browseConfig := d.button("Browse file", "b", browse(config, "Choose Kafka connection settings"))
+	browseCA := d.button("Pick CA", "t", browse(ca, "Choose CA certificate"))
+	browseCert := d.button("Pick cert", "e", browse(cert, "Choose client certificate"))
+	browseKey := d.button("Pick key", "k", browse(key, "Choose client private key"))
 
 	render := func(saveProfile bool) {
 		focused, _ := form.GetFocusedItemIndex()
@@ -516,7 +512,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		}
 	})
 	fieldShortcuts := map[rune]tview.FormItem{
-		'a': brokers, 's': protocol, 'n': profileName, 't': serverName,
+		'a': brokers, 's': protocol, 'n': profileName, 'h': serverName,
 		'm': mechanism, 'u': username, 'p': password,
 	}
 	d.keymap(func(e *tcell.EventKey) bool {
@@ -551,22 +547,6 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			if form.GetFormItemIndex(remember.GetLabel()) >= 0 {
 				remember.SetChecked(!remember.IsChecked())
 			}
-		case 'b':
-			if cli || mode == connectionFile {
-				browse(config, "Choose Kafka connection settings")()
-			}
-		case 'c':
-			if mode == connectionTLS || mode == connectionSASLTLS {
-				browse(ca, "Choose CA certificate")()
-			}
-		case 'e':
-			if mode == connectionTLS || mode == connectionSASLTLS {
-				browse(cert, "Choose client certificate")()
-			}
-		case 'k':
-			if mode == connectionTLS || mode == connectionSASLTLS {
-				browse(key, "Choose client private key")()
-			}
 		default:
 			return false
 		}
@@ -575,7 +555,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 	render(save.IsChecked())
 	u.app.SetFocus(form)
 	if notice == "" {
-		d.hint("Enter host:port or comma-separated brokers.  " + keyHint("Tab") + " Next field")
+		d.hint("Enter host:port or comma-separated brokers.\n" + keyHint("Tab") + " Next field  " + keyHint("Alt+C") + " Connect while typing")
 	} else {
 		d.say(notice)
 	}

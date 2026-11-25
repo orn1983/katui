@@ -158,30 +158,29 @@ func payloadAvailability(r *storedRecord) string {
 	return "Complete"
 }
 
-func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
-	if u.inspector != nil && u.inspector.mode.IsOpen() {
-		return ev
+func (u *ui) clearBuffer() {
+	old := append([]*storedRecord{}, u.records...)
+	old = append(old, u.pinned)
+	u.records = nil
+	u.recordBytes = 0
+	u.pinned = nil
+	if u.inspector != nil {
+		u.inspector.setRecords(nil)
 	}
+	for _, r := range old {
+		u.release(r)
+	}
+	u.refreshView()
+}
+
+func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 	pane := u.inspector
-	switch ev.Rune() {
+	switch shortcutRune(ev) {
 	case 'p':
 		u.pauseReader()
 	case 'x':
 		u.stopReader()
 		u.updateStatus()
-	case 'l':
-		old := append([]*storedRecord{}, u.records...)
-		old = append(old, u.pinned)
-		u.records = nil
-		u.recordBytes = 0
-		u.pinned = nil
-		if pane != nil {
-			pane.setRecords(nil)
-		}
-		for _, r := range old {
-			u.release(r)
-		}
-		u.refreshView()
 	case 'f':
 		u.followLatest = !u.followLatest
 		u.refreshView()
@@ -196,9 +195,9 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 				u.fullscreen = ""
 				u.refreshView()
 			}
-			pane.focusFirst()
+			pane.focusViewer()
 		}
-	case 'm', 'd', 'h', 'o', 'u', 'y', 'v', 'E':
+	case 'm', 'd', 'h', 'o', 'u', 'y', 'v', 's', 'E':
 		if pane != nil && pane.shortcut(ev.Rune()) {
 			return nil
 		}
@@ -269,12 +268,12 @@ func metadataText(r *storedRecord) string {
 	}
 	return out.String()
 }
-func (u *ui) fullRecord() {
+func (u *ui) fullRecord() *payloadPane {
 	if u.pinned == nil {
 		u.say("Select a buffered record first")
-		return
+		return nil
 	}
-	u.payloadDialog(true, []*storedRecord{u.pinned}, u.profile(u.pinned.id.Topic).Mode)
+	return u.payloadDialog(true, []*storedRecord{u.pinned}, u.profile(u.pinned.id.Topic).Mode)
 }
 func (u *ui) comparison() {
 	if len(u.checked) == 0 {
@@ -294,7 +293,7 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 	if full {
 		title = "Full payload"
 	}
-	d := u.dialog(title, p.root, p.mode)
+	d := u.dialog(title, p.root, p.content)
 	p.dialog = d
 	d.focusables = p.focusables()
 	close := func() {
@@ -309,18 +308,28 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 		}
 	}
 	d.cancel = func() {
+		if p.confirmLoad != nil {
+			p.confirmLoad(false)
+			return
+		}
 		if full && p.rendering {
 			p.cancelRender()
 			p.rendering = false
 			p.result.incomplete = true
+			p.loadCanceled = true
+			p.updateLoadButton()
 			p.status.SetText("Loading canceled")
-			d.hint(keyHint("L") + " Load again  " + keyHint("Esc") + " Close")
+			d.hint(keyHint("l") + " Load again  " + keyHint("Esc") + " Close")
+			return
+		}
+		if full && p.search.HasFocus() {
+			p.focusViewer()
 			return
 		}
 		close()
 	}
 	if full {
-		d.button("Load full", "L", p.loadFull)
+		p.loadButton = d.button("Load full", "l", p.loadFull)
 		d.button("Prev", "p", func() { p.advance(-1) })
 		d.button("Next", "n", func() { p.advance(1) })
 	} else {
@@ -330,9 +339,12 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 	}
 	d.button("Value", "y", p.copyValue)
 	d.button("View", "v", p.copyView)
-	d.button("Export", "E", p.exportValue)
-	d.button("Back", "Esc", close)
+	d.button("Save", "s", p.exportValue)
+	d.button("Back", "Esc", func() { d.cancel() })
 	d.keymap(func(ev *tcell.EventKey) bool {
+		if p.confirmLoad != nil {
+			return ev.Key() != tcell.KeyEnter && ev.Key() != tcell.KeyTab && ev.Key() != tcell.KeyBacktab
+		}
 		if isEditing(u.app.GetFocus()) {
 			return false
 		}
@@ -340,42 +352,26 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 			u.payloadDialog(true, records, p.modeName)
 			return true
 		}
-		if ev.Key() != tcell.KeyRune || ev.Modifiers()&^tcell.ModShift != 0 {
-			return false
-		}
-		switch ev.Rune() {
+		key := shortcutRune(ev)
+		switch key {
 		case '/':
 			if full {
 				u.app.SetFocus(p.search)
-				return true
+			} else {
+				fullPane := u.payloadDialog(true, records, p.modeName)
+				u.app.SetFocus(fullPane.search)
 			}
-		case 'n':
-			if full {
-				p.advance(1)
-				return true
-			}
-		case 'p':
-			if full {
-				p.advance(-1)
-				return true
-			}
-		case '1':
-			if !full {
-				p.showMetadata(false)
-				return true
-			}
-		case '2':
-			if !full {
-				p.showMetadata(true)
-				return true
-			}
+			return true
 		case 't':
 			if !full || len(p.topics()) > 1 {
 				p.chooseTopic(nil)
 				return true
 			}
 		}
-		return p.shortcut(ev.Rune())
+		if _, isButton := d.actions[key]; isButton {
+			return false
+		}
+		return p.shortcut(key)
 	})
 	p.refresh()
 	return p

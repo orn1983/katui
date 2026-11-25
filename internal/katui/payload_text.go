@@ -303,7 +303,7 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 				delta = -delta
 			}
 		case tcell.KeyRune:
-			switch event.Rune() {
+			switch shortcutRune(event) {
 			case 'j':
 				delta = 1
 			case 'k':

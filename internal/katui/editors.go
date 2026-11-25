@@ -87,7 +87,7 @@ func (p *payloadPane) csvEditor(topic string) {
 		d.close()
 		p.refresh()
 	}
-	d.button("Apply", "Alt+A", apply)
+	d.button("Apply", "a", apply)
 	d.button("Cancel", "Esc", d.close)
 	d.keymap(func(e *tcell.EventKey) bool {
 		switch alt(e) {
@@ -95,8 +95,6 @@ func (p *payloadPane) csvEditor(topic string) {
 			focusForm(u, form, 0)
 		case 's':
 			save.SetChecked(!save.IsChecked())
-		case 'a':
-			apply()
 		default:
 			if form.HasFocus() && (e.Key() == tcell.KeyTab || e.Key() == tcell.KeyBacktab) {
 				i, _ := form.GetFocusedItemIndex()
@@ -231,21 +229,15 @@ func (p *payloadPane) protoEditor(topic string) {
 		}
 		d.close()
 	}
-	d.button("Browse", "Alt+B", browse)
-	d.button("Add folder", "Alt+I", addFolder)
-	loadButton = d.button("Load", "Alt+L", load)
-	applyButton = d.button("Apply", "Alt+A", apply).SetDisabled(true)
+	d.button("Browse", "b", browse)
+	d.button("Add folder", "i", addFolder)
+	loadButton = d.button("Load", "l", load)
+	applyButton = d.button("Apply", "a", apply).SetDisabled(true)
 	d.button("Cancel", "Esc", d.cancel)
 	d.keymap(func(e *tcell.EventKey) bool {
 		switch alt(e) {
 		case 'p':
 			focusForm(u, form, 0)
-		case 'b':
-			browse()
-		case 'i':
-			addFolder()
-		case 'l':
-			load()
 		case 'm':
 			if schema != nil {
 				focusForm(u, form, 2)
@@ -254,8 +246,6 @@ func (p *payloadPane) protoEditor(topic string) {
 			focusForm(u, form, 3)
 		case 's':
 			save.SetChecked(!save.IsChecked())
-		case 'a':
-			apply()
 		default:
 			return false
 		}
@@ -294,7 +284,7 @@ type filePicker struct {
 func (u *ui) fileBrowser(picker filePicker, pick func(string)) {
 	folderMode := picker.accept == nil
 	path := tview.NewInputField().SetLabel(buttonLabel("Path", "Alt+P") + " ")
-	filter := tview.NewInputField().SetLabel(buttonLabel("Filter", "Alt+F") + " ")
+	filter := tview.NewInputField().SetLabel(buttonLabel("Filter", "/") + " ")
 	table := tview.NewTable().SetFixed(1, 0).SetSelectable(true, false)
 	table.SetBorder(true).SetTitle(" " + buttonLabel("Files", "Alt+B") + " ")
 	preview := tview.NewTextView().SetScrollable(true)
@@ -509,30 +499,26 @@ func (u *ui) fileBrowser(picker filePicker, pick func(string)) {
 		redraw()
 		d.say(fmt.Sprintf("Show hidden files %t", hidden))
 	}
-	d.button("Open", "Alt+O", open)
+	d.button("Open", "o", open)
 	if folderMode {
-		d.button("Choose folder", "", chooseFolder)
+		d.button("Choose folder", "s", chooseFolder)
 	}
-	d.button("Up", "Alt+U", up)
-	d.button("Home", "Alt+H", home)
-	d.button("Hidden", "Alt+D", toggleHidden)
+	d.button("Up", "u", up)
+	d.button("Home", "h", home)
+	d.button("Hidden", ".", toggleHidden)
 	d.button("Back", "Esc", d.close)
 	d.keymap(func(e *tcell.EventKey) bool {
-		switch alt(e) {
-		case 'o':
-			open()
-		case 'u':
+		if table.HasFocus() && (e.Key() == tcell.KeyBackspace || e.Key() == tcell.KeyBackspace2) {
 			up()
-		case 'h':
-			home()
+			return true
+		}
+		switch d.actionKey(e) {
 		case 'p':
 			u.app.SetFocus(path)
-		case 'f':
+		case '/', 'f':
 			u.app.SetFocus(filter)
 		case 'b':
 			u.app.SetFocus(table)
-		case 'd':
-			toggleHidden()
 		default:
 			return false
 		}

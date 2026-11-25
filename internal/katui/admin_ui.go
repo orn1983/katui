@@ -28,7 +28,7 @@ func (u *ui) topicForm(topic, initial string) {
 	name := field(form, buttonLabel("Name", "Alt+N"), topic)
 	name.SetDisabled(initial != opCreate)
 	partitions := field(form, buttonLabel("Partitions", "Alt+P"), "1")
-	replicas := field(form, buttonLabel("Replicas", "Alt+R"), "1")
+	replicas := field(form, buttonLabel("Replicas", "Alt+F"), "1")
 	partitions.SetDisabled(initial != opCreate)
 	replicas.SetDisabled(initial != opCreate)
 	key := field(form, buttonLabel("Setting key", "Alt+K"), "")
@@ -187,10 +187,10 @@ func (u *ui) topicForm(topic, initial string) {
 		}
 		u.prepareReview(d, in, &busy, reviewButton)
 	}
-	d.button("Stage", "Alt+S", func() { stage(false) })
-	d.button("Default", "Alt+D", func() { stage(true) })
-	d.button("Unstage", "Alt+U", unstage)
-	reviewButton = d.button("Review", "Alt+G", review)
+	d.button("Stage", "s", func() { stage(false) })
+	d.button("Default", "d", func() { stage(true) })
+	d.button("Unstage", "u", unstage)
+	reviewButton = d.button("Review", "r", review)
 	d.button("Cancel", "Esc", d.close)
 	render = func() {
 		_, operation := op.GetCurrentOption()
@@ -227,7 +227,7 @@ func (u *ui) topicForm(topic, initial string) {
 			if operation == opCreate {
 				focusForm(u, form, 2)
 			}
-		case 'r':
+		case 'f':
 			if operation == opCreate {
 				focusForm(u, form, 3)
 			}
@@ -247,12 +247,6 @@ func (u *ui) topicForm(topic, initial string) {
 			if operation != opDeleteTopic {
 				focusForm(u, form, 5)
 			}
-		case 's':
-			stage(false)
-		case 'd':
-			stage(true)
-		case 'u':
-			unstage()
 		case 'g':
 			review()
 		default:
@@ -332,9 +326,9 @@ func (u *ui) groupForm(group, scope, topic string, partition int32) {
 		}
 		u.prepareReview(d, in, &busy, reviewButton)
 	}
-	all := d.button("All", "Alt+A", func() { selector.every(true) })
-	none := d.button("None", "Alt+N", func() { selector.every(false) })
-	reviewButton = d.button("Review", "Alt+G", review)
+	all := d.button("All", "a", func() { selector.every(true) })
+	none := d.button("None", "n", func() { selector.every(false) })
+	reviewButton = d.button("Review", "r", review)
 	d.button("Cancel", "Esc", d.close)
 	render = func() {
 		_, operation := op.GetCurrentOption()
@@ -367,14 +361,6 @@ func (u *ui) groupForm(group, scope, topic string, partition int32) {
 		case 'p':
 			if reset {
 				u.app.SetFocus(selector.list)
-			}
-		case 'a':
-			if reset {
-				selector.every(true)
-			}
-		case 'n':
-			if reset {
-				selector.every(false)
 			}
 		case 'm':
 			if reset {
@@ -510,18 +496,19 @@ func (u *ui) adminReview(plan adminPlan) {
 			d.close()
 		}
 	}
-	applyButton = d.button("Apply", "Alt+A", apply).SetDisabled(true)
+	applyButton = d.button("Apply", "a", apply).SetDisabled(true)
 	cancelButton = d.button("Cancel", "Esc", d.cancel)
 	confirmation.SetChangedFunc(func(value string) {
 		if !attempted {
 			applyButton.SetDisabled(value != plan.target)
 		}
 	})
-	d.keymap(func(e *tcell.EventKey) bool {
-		if alt(e) == 'a' {
-			apply()
-			return true
+	confirmation.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter && !applyButton.IsDisabled() {
+			u.app.SetFocus(applyButton)
 		}
+	})
+	d.keymap(func(e *tcell.EventKey) bool {
 		return inFlight && e.Key() == tcell.KeyEnter
 	})
 }

@@ -17,9 +17,15 @@ type dialog struct {
 	footer     *tview.Flex
 	previous   tview.Primitive
 	buttons    []*tview.Button
+	actions    map[rune]dialogAction
 	focusables []tview.Primitive
 	cancel     func()
 	closed     bool
+}
+
+type dialogAction struct {
+	button *tview.Button
+	run    func()
 }
 
 func (u *ui) newDialog(title string, body tview.Primitive) *dialog {
@@ -81,33 +87,67 @@ func (d *dialog) button(label, key string, action func()) *tview.Button {
 	b := tview.NewButton(buttonLabel(label, key)).SetSelectedFunc(action)
 	d.buttons = append(d.buttons, b)
 	d.footer.AddItem(b, tview.TaggedStringWidth(b.GetLabel())+2, 0, false)
+	if len(key) == 1 {
+		if d.actions == nil {
+			d.actions = map[rune]dialogAction{}
+		}
+		d.actions[rune(key[0])] = dialogAction{b, action}
+	}
 	return b
 }
-func (d *dialog) keymap(handle func(*tcell.EventKey) bool) {
-	d.root.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			if dd, ok := d.u.app.GetFocus().(*tview.DropDown); ok && dd.IsOpen() {
-				return event
-			}
-			if form, ok := d.body.(*tview.Form); ok {
-				for i := range form.GetFormItemCount() {
-					// An open dropdown transfers focus to its internal list.
-					if dd, ok := form.GetFormItem(i).(*tview.DropDown); ok && dd.IsOpen() {
-						return event
-					}
+
+func (d *dialog) actionKey(event *tcell.EventKey) rune {
+	if key := alt(event); key != 0 {
+		return key
+	}
+	if !isEditing(d.u.app.GetFocus()) {
+		return shortcutRune(event)
+	}
+	return 0
+}
+
+func (d *dialog) dropdownOpen() bool {
+	for _, p := range d.focusables {
+		if dd, ok := p.(*tview.DropDown); ok && dd.IsOpen() && dd.HasFocus() {
+			return true
+		}
+		if f, ok := p.(*tview.Form); ok {
+			for i := range f.GetFormItemCount() {
+				if dd, ok := f.GetFormItem(i).(*tview.DropDown); ok && dd.IsOpen() && dd.HasFocus() {
+					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+func (d *dialog) keymap(handle func(*tcell.EventKey) bool) {
+	d.root.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if d.dropdownOpen() {
+			// The list's Escape closes only the choices and returns focus to
+			// the same field. The form's Escape would reset to its first field.
+			if list, ok := d.u.app.GetFocus().(*tview.List); ok && event.Key() == tcell.KeyEscape {
+				list.InputHandler()(event, func(p tview.Primitive) { d.u.app.SetFocus(p) })
+				return nil
+			}
+			return event
+		}
+		if event.Key() == tcell.KeyEscape {
 			d.cancel()
 			return nil
 		}
 		if handle != nil && handle(event) {
 			return nil
 		}
+		if action, ok := d.actions[d.actionKey(event)]; ok {
+			if !action.button.IsDisabled() {
+				action.run()
+			}
+			return nil
+		}
 		if event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab {
 			focus := d.u.app.GetFocus()
-			if dd, ok := focus.(*tview.DropDown); ok && dd.IsOpen() {
-				return event
-			}
 			if form, ok := d.body.(*tview.Form); ok && form.HasFocus() {
 				item, _ := form.GetFocusedItemIndex()
 				if event.Key() == tcell.KeyTab && item < form.GetFormItemCount()-1 {
@@ -144,17 +184,15 @@ func (d *dialog) keymap(handle func(*tcell.EventKey) bool) {
 	})
 }
 func alt(event *tcell.EventKey) rune {
-	if event.Key() == tcell.KeyRune && event.Modifiers()&tcell.ModAlt != 0 {
+	if event.Key() == tcell.KeyRune && event.Modifiers()&^tcell.ModShift == tcell.ModAlt {
 		return event.Rune()
 	}
 	return 0
 }
 func isEditing(p tview.Primitive) bool {
-	switch f := p.(type) {
-	case *tview.InputField, *tview.TextArea:
+	switch p.(type) {
+	case *tview.InputField, *tview.TextArea, *tview.DropDown:
 		return true
-	case *tview.DropDown:
-		return f.IsOpen()
 	}
 	return false
 }
@@ -198,21 +236,6 @@ func (u *ui) quit() {
 	d.button("Yes", "y", yes)
 	no := d.button("No", "n", d.close)
 	u.app.SetFocus(no)
-	d.keymap(func(ev *tcell.EventKey) bool {
-		if ev.Key() != tcell.KeyRune {
-			return false
-		}
-		switch ev.Rune() {
-		case 'y':
-			yes()
-		case 'n':
-			d.close()
-		case 'q':
-		default:
-			return false
-		}
-		return true
-	})
 }
 func (u *ui) help() {
 	k := keyHint
@@ -224,28 +247,37 @@ func (u *ui) help() {
 		"In tables, " + k("←/→") + " Scroll sideways  " + k("Ctrl+←/→") + " Scroll farther",
 		k("Enter") + " Open selection  " + k("Esc") + " Back or cancel",
 		k("/") + " Search  " + k("s") + " Sort  " + k("r") + " Refresh  " + k("z") + " Toggle fullscreen",
-		k("Ctrl+P") + " Commands  " + k("?") + " Help  " + k("q") + " Quit",
+		k(":") + " or " + k("Ctrl+P") + " Commands  " + k("?") + " Help  " + k("q") + " Quit",
+		"Use the shown lowercase letters on lists, viewers, and buttons.",
+		"While typing, use Alt with the shown action letter or Tab to reach a button.",
 		"",
 		"Kafka clusters",
 		k("↑") + " " + k("↓") + " Select  " + k("Enter") + " / " + k("c") + " Connect  " + k("e") + " Edit  " + k("n") + " New",
 		k("1") + " / " + k("2") + " / " + k("3") + " Switch workspaces  " + k("Esc") + " Back",
-		k("Alt+G") + " Connect from the editor  " + k("Esc") + " Back or cancel",
+		k("c") + " Connect from the editor  " + k("Esc") + " Back or cancel",
 		"",
 		"Topics and consumer groups",
 		k("h") + " Internal topics  " + k("g") + " Topic consumers",
 		k("n") + " Create topic  " + k("a") + " Manage  " + k("d") + " Delete topic  " + k("c") + " Start reader",
+		k("Space") + " Toggle partition  " + k("a") + " All  " + k("n") + " None  " + k("c") + " Start selected reader",
+		k("r") + " Review changes  " + k("a") + " Apply after entering the exact target name",
 		"",
 		"Messages and payloads",
-		k("b") + " Records  " + k("i") + " Inspector  " + k("m") + " Mode  " + k("F4") + " Full payload",
-		k("p") + " Pause  " + k("x") + " Stop  " + k("l") + " Clear buffer  " + k("f") + " Follow latest",
+		k("b") + " Records  " + k("i") + " Inspect  " + k("m") + " Choose format  " + k("F4") + " Full payload",
+		k("p") + " Pause  " + k("x") + " Stop  " + k("f") + " Follow latest  ·  Clear buffer in Commands",
 		k("Space") + " Check  " + k("a") + " Check matching  " + k("w") + " Compare  " + k("e") + " Uncheck all",
 		k("o") + " CSV columns  " + k("u") + " Protobuf  " + k("d") + " Delimiter  " + k("h") + " Header",
-		k("y") + " Copy Value  " + k("v") + " Copy View  " + k("E") + " Export",
+		k("y") + " Copy Value  " + k("v") + " Copy View  " + k("s") + " Save value to file",
 		k("Shift+arrows") + " Select text  " + k("Ctrl+A") + " Select all  " + k("Ctrl+C") + " Copy selection",
 		"In payload text, " + k("←/→") + " Move cursor  " + k("Shift+←/→") + " Extend or shrink selection",
 		k("Alt+←/→") + " Pan 8 columns  " + k("Ctrl+←/→") + " Pan half the viewport (at least 8 columns)",
 		"In the tree, " + k("←/→") + " Collapse or expand nodes",
-		k("/") + " Find in Full view  " + k("n") + " Next  " + k("p") + " Previous  " + k("L") + " Load full",
+		k("/") + " Search payload in Full view  " + k("n") + " Next  " + k("p") + " Previous  " + k("l") + " Load full",
+		"Confirm the larger load with " + k("Enter") + " or cancel with " + k("Esc"),
+		"",
+		"Files and editors",
+		k("/") + " Filter files  " + k("Enter") + " Open  " + k("u") + " Up  " + k("h") + " Home  " + k(".") + " Hidden files",
+		k("b") + " Browse schema  " + k("i") + " Add import folder  " + k("l") + " Load schema  " + k("a") + " Apply",
 		"",
 		"Offsets are positions. Retained counts and rates are estimates.",
 		"Read-only inspection does not join an application consumer group.",
@@ -256,7 +288,7 @@ func (u *ui) help() {
 	d.button("Back", "Esc", d.close)
 }
 func (u *ui) palette() {
-	list := tview.NewList().ShowSecondaryText(false).SetShortcutStyle(shortcutStyle())
+	list := u.newList().ShowSecondaryText(false)
 	d := u.dialog("Commands", list, list)
 	d.hint(keyHint("Enter") + " Run selected command  " + keyHint("Esc") + " Back")
 	add := func(label string, key rune, fn func()) { list.AddItem(label, "", key, func() { d.close(); fn() }) }
@@ -265,12 +297,15 @@ func (u *ui) palette() {
 	add("Messages", '3', func() { u.changeWorkspace(2) })
 	add("Refresh monitoring", 'r', u.requestRefresh)
 	add("Kafka clusters", '4', u.showClusters)
+	if u.workspace == 2 && len(u.records) > 0 {
+		add("Clear message buffer", 'l', u.clearBuffer)
+	}
 	add("Change color theme", 't', u.theme)
 	add("Help", '?', u.help)
 	add("Quit", 'q', u.quit)
 }
 func (u *ui) theme() {
-	list := tview.NewList().ShowSecondaryText(false)
+	list := u.newList().ShowSecondaryText(false)
 	d := u.dialog("Color theme", list, list)
 	d.hint(keyHint("Enter") + " Apply selected theme  " + keyHint("Esc") + " Back")
 	for _, theme := range []struct {

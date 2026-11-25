@@ -197,7 +197,7 @@ func (p *payloadPane) exportValue() {
 	}
 	path := field(form, "New file", "")
 	d := p.u.dialog("Export complete value", form, form)
-	d.say("Enter an output path. Existing files are left intact.")
+	d.hint("Type a new file path.  " + keyHint("Enter") + " Save")
 	var cancel context.CancelFunc
 	var exportButton *tview.Button
 	writing := false
@@ -252,10 +252,10 @@ func (p *payloadPane) exportValue() {
 			})
 		}()
 	}
-	exportButton = d.button("Export", "Alt+E", export)
+	exportButton = d.button("Save", "s", export)
 	d.button("Back", "Esc", close)
 	d.keymap(func(e *tcell.EventKey) bool {
-		if alt(e) == 'e' {
+		if e.Key() == tcell.KeyEnter && path.HasFocus() || alt(e) == 'e' {
 			export()
 			return true
 		}

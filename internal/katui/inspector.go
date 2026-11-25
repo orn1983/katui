@@ -21,7 +21,9 @@ type payloadPane struct {
 	viewer, nodeView                         *payloadText
 	document                                 payloadDocument
 	expanded                                 bool
-	mode                                     *tview.DropDown
+	mode, loadButton                         *tview.Button
+	confirmLoad                              func(bool)
+	loadCanceled                             bool
 	search                                   *tview.InputField
 	tree                                     *tview.TreeView
 	delimButton, headerButton, profileButton *tview.Button
@@ -55,13 +57,7 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	p.viewer = newPayloadText(p.copyText)
 	p.nodeView = newPayloadText(p.copyText)
 	p.tree = tview.NewTreeView()
-	p.mode = tview.NewDropDown().SetLabel(buttonLabel("Mode", "m") + "  ")
-	p.mode.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
-		if p.mode.IsOpen() {
-			return u.viewerKeys(e, nil, nil)
-		}
-		return e
-	})
+	p.mode = tview.NewButton("").SetSelectedFunc(p.chooseFormat)
 	p.delimButton = tview.NewButton(buttonLabel("Delimiter", "d")).SetSelectedFunc(p.delimiterDialog)
 	p.headerButton = tview.NewButton(buttonLabel("Header", "h")).SetSelectedFunc(p.toggleHeader)
 	p.profileButton = tview.NewButton(buttonLabel("Columns", "o")).SetSelectedFunc(func() { p.editProfile(csvMode(p.modeName)) })
@@ -120,20 +116,9 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	return p
 }
 func (p *payloadPane) rebuild() {
-	options, labels := []string{}, []string{}
-	for i, m := range modes {
-		if !p.comparison || !treeMode(m) {
-			options = append(options, m)
-			labels = append(labels, modeLabels[i])
-		}
-	}
-	p.mode.SetOptions(labels, func(_ string, i int) {
-		if i >= 0 {
-			p.changeMode(options[i])
-		}
-	}).SetCurrentOption(indexOf(options, p.modeName))
+	p.mode.SetLabel(buttonLabel("Format", "m") + " · " + modeLabels[indexOf(modes, p.modeName)])
 	p.bar.Clear()
-	p.bar.AddItem(p.mode, 0, 1, true)
+	p.bar.AddItem(p.mode, 0, 1, false)
 	if csvMode(p.modeName) {
 		p.bar.AddItem(p.delimButton, 13, 0, false).AddItem(p.headerButton, 10, 0, false)
 		p.profileButton.SetLabel(buttonLabel("Columns", "o"))
@@ -153,11 +138,11 @@ func (p *payloadPane) rebuild() {
 		p.metadata.SetText(source)
 		p.root.AddItem(p.metadata, 1, 0, false)
 	}
-	p.root.AddItem(p.bar, 1, 0, true)
+	p.root.AddItem(p.bar, 1, 0, false)
 	if p.full {
 		p.root.AddItem(p.search, 1, 0, false)
 	}
-	p.root.AddItem(p.status, 1, 0, false).AddItem(p.content, 0, 1, false).AddItem(p.navigation, 2, 0, false)
+	p.root.AddItem(p.status, 1, 0, false).AddItem(p.content, 0, 1, true).AddItem(p.navigation, 2, 0, false)
 	p.layout()
 	if p.dialog != nil {
 		p.dialog.focusables = p.focusables()
@@ -172,19 +157,18 @@ func (p *payloadPane) layout() {
 	}
 }
 func (p *payloadPane) focusables() []tview.Primitive {
-	controls := []tview.Primitive{p.mode}
-	if csvMode(p.modeName) {
-		controls = append(controls, p.delimButton, p.headerButton, p.profileButton)
-	} else if protoMode(p.modeName) {
-		controls = append(controls, p.profileButton)
+	controls := []tview.Primitive{p.viewer}
+	if p.result.tree != nil && !p.metadataTab && treeMode(p.modeName) {
+		controls = []tview.Primitive{p.tree, p.nodeView}
 	}
 	if p.full {
 		controls = append(controls, p.search)
 	}
-	if p.result.tree != nil && !p.metadataTab && treeMode(p.modeName) {
-		controls = append(controls, p.tree, p.nodeView)
-	} else {
-		controls = append(controls, p.viewer)
+	controls = append(controls, p.mode)
+	if csvMode(p.modeName) {
+		controls = append(controls, p.delimButton, p.headerButton, p.profileButton)
+	} else if protoMode(p.modeName) {
+		controls = append(controls, p.profileButton)
 	}
 	return controls
 }
@@ -208,18 +192,37 @@ func (p *payloadPane) cycle(reverse bool) bool {
 	p.u.app.SetFocus(seq[i])
 	return true
 }
-func (p *payloadPane) focusFirst() { p.root.SetBorderColor(p.u.accent); p.u.app.SetFocus(p.mode) }
-func (p *payloadPane) focusLast() {
-	seq := p.focusables()
-	p.root.SetBorderColor(p.u.accent)
-	p.u.app.SetFocus(seq[len(seq)-1])
-}
 func (p *payloadPane) focusViewer() {
+	p.root.SetBorderColor(p.u.accent)
 	if p.result.tree != nil && !p.metadataTab && treeMode(p.modeName) {
 		p.u.app.SetFocus(p.tree)
 	} else {
 		p.u.app.SetFocus(p.viewer)
 	}
+}
+
+func (p *payloadPane) chooseFormat() {
+	list := p.u.newList().ShowSecondaryText(false)
+	d := p.u.dialog("Payload format", list, list)
+	d.cancel = func() {
+		d.close()
+		p.focusViewer()
+	}
+	for i, mode := range modes {
+		if p.comparison && treeMode(mode) {
+			continue
+		}
+		list.AddItem(modeLabels[i], "", 0, func() {
+			d.close()
+			p.changeMode(mode)
+			p.focusViewer()
+		})
+		if mode == p.modeName {
+			list.SetCurrentItem(list.GetItemCount() - 1)
+		}
+	}
+	d.hint(keyHint("Enter") + " Choose format  " + keyHint("Esc") + " Back")
+	d.button("Back", "Esc", d.cancel)
 }
 func (p *payloadPane) topics() []string {
 	set := map[string]bool{}
@@ -260,6 +263,9 @@ func (p *payloadPane) changeMode(mode string) {
 	p.refresh()
 }
 func (p *payloadPane) notice(text string) {
+	if p.confirmLoad != nil {
+		return
+	}
 	if p.dialog != nil {
 		p.dialog.say(text)
 	} else {
@@ -285,6 +291,7 @@ func (p *payloadPane) cancelRender() {
 }
 func (p *payloadPane) refresh() {
 	p.cancelRender()
+	p.loadCanceled = false
 	p.result = payloadResult{}
 	p.textMatches = nil
 	p.treeMatches = nil
@@ -305,6 +312,7 @@ func (p *payloadPane) refresh() {
 	}
 	if len(p.records) == 0 {
 		p.rendering = false
+		p.updateLoadButton()
 		return
 	}
 	ctx, cancel := context.WithCancel(p.u.ctx)
@@ -319,9 +327,14 @@ func (p *payloadPane) refresh() {
 	limits := p.u.b.inspectionLimits(p.expanded)
 	release := p.u.holdPayloads(records)
 	p.rendering = true
+	p.updateLoadButton()
 	p.status.SetText("Preparing payload…")
 	if p.full {
-		p.status.SetText("Preparing payload…  " + keyHint("Esc") + " Cancel")
+		status := "Preparing payload…"
+		if p.expanded {
+			status = "Loading full payload…"
+		}
+		p.status.SetText(status + "  " + keyHint("Esc") + " Cancel")
 	}
 	go func() {
 		defer cancel()
@@ -340,13 +353,14 @@ func (p *payloadPane) refresh() {
 			p.rendering = false
 			p.result = result
 			p.document = doc
+			p.updateLoadButton()
 			notice := tview.Escape(safe(strings.ReplaceAll(result.warning, "\n", " · "), false))
-			if p.full && result.canExpand && !p.expanded {
-				notice = keyHint("L") + " Load full · " + notice
+			if p.canLoadFull() {
+				notice = keyHint("l") + " Load full · " + notice
 			}
 			if notice == "" && p.dialog == nil {
 				k := keyHint
-				notice = k("Shift+arrows") + " Select · " + k("y") + " Value · " + k("v") + " View · " + k("E") + " Export · " + k("F4") + " Full"
+				notice = k("y") + " Value · " + k("v") + " View · " + k("s") + " Save · " + k("F4") + " Full"
 			}
 			p.status.SetText(notice)
 			if p.dialog != nil && result.warning != "" {
@@ -466,34 +480,64 @@ func (p *payloadPane) setTextMatch(match []int) {
 	}
 }
 
-func (p *payloadPane) loadFull() {
-	if !p.full {
-		return
-	}
-	if p.expanded && p.rendering {
-		p.notice("Load already in progress. Esc cancels.")
-		return
-	}
-	text := tview.NewTextView().SetDynamicColors(true).SetWordWrap(true).SetText(
-		"Load and parse the retained values with up to 128 MiB of input and 128 MiB of displayed text. " +
-			"CSV remains limited to 50,000 rows and 256 columns. Trees keep up to 50,000 nodes and 128 levels per record. " +
-			"Large structured payloads can use substantially more memory. " + keyHint("Esc") + " cancels loading.")
-	d := p.u.dialog("Load full payload", text, text)
-	load := func() {
-		d.close()
-		p.expanded = true
-		p.refresh()
-	}
-	d.button("Load", "y", load)
-	cancel := d.button("Cancel", "Esc", d.close)
-	p.u.app.SetFocus(cancel)
-	d.keymap(func(e *tcell.EventKey) bool {
-		if e.Key() == tcell.KeyRune && e.Rune() == 'y' {
-			load()
-			return true
-		}
+func (p *payloadPane) canLoadFull() bool {
+	if !p.full || p.rendering {
 		return false
-	})
+	}
+	limits := p.u.b.inspectionLimits(false)
+	canRaiseLimits := limits.structured < maxInspectionBytes || limits.rendered < maxInspectionBytes
+	return p.result.canExpand && !p.expanded && canRaiseLimits
+}
+
+func (p *payloadPane) updateLoadButton() {
+	if p.loadButton == nil {
+		return
+	}
+	d := p.dialog
+	show := p.canLoadFull() || p.loadCanceled
+	label := "Load full"
+	if p.loadCanceled {
+		label = "Retry"
+	}
+	p.loadButton.SetLabel(buttonLabel(label, "l"))
+	p.loadButton.SetDisabled(!show)
+	d.footer.Clear()
+	for _, button := range d.buttons {
+		if button != p.loadButton || show {
+			d.footer.AddItem(button, tview.TaggedStringWidth(button.GetLabel())+2, 0, false)
+		}
+	}
+}
+
+func (p *payloadPane) loadFull() {
+	if p.loadCanceled {
+		p.refresh()
+		return
+	}
+	if !p.canLoadFull() || p.confirmLoad != nil {
+		return
+	}
+	d := p.dialog
+	buttons, focusables := d.buttons, d.focusables
+	previousHint := d.status.GetText(false)
+	p.confirmLoad = func(load bool) {
+		p.confirmLoad = nil
+		d.buttons, d.focusables = buttons, focusables
+		p.updateLoadButton()
+		p.focusViewer()
+		if load {
+			p.expanded = true
+			p.refresh()
+		} else {
+			d.hint(previousHint)
+		}
+	}
+	d.buttons, d.focusables = nil, nil
+	d.footer.Clear()
+	load := d.button("Load", "Enter", func() { p.confirmLoad(true) })
+	d.button("Cancel", "Esc", func() { p.confirmLoad(false) })
+	d.hint(fmt.Sprintf("Load up to %d MiB each for input and display?\nParsing can use additional memory.", maxInspectionBytes>>20))
+	p.u.app.SetFocus(load)
 }
 
 func (p *payloadPane) scheduleSearch() {
@@ -626,8 +670,7 @@ func (p *payloadPane) advance(change int) {
 func (p *payloadPane) shortcut(key rune) bool {
 	switch key {
 	case 'm':
-		p.u.app.SetFocus(p.mode)
-		p.mode.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, 0), func(p2 tview.Primitive) { p.u.app.SetFocus(p2) })
+		p.chooseFormat()
 	case 'd':
 		if !csvMode(p.modeName) {
 			return false
@@ -652,9 +695,9 @@ func (p *payloadPane) shortcut(key rune) bool {
 		p.copyValue()
 	case 'v':
 		p.copyView()
-	case 'E':
+	case 's', 'E':
 		p.exportValue()
-	case 'L':
+	case 'l', 'L':
 		if !p.full {
 			return false
 		}
@@ -677,7 +720,7 @@ func (p *payloadPane) chooseTopic(action func(string)) {
 		}
 		return
 	}
-	list := tview.NewList().ShowSecondaryText(false)
+	list := p.u.newList().ShowSecondaryText(false)
 	d := p.u.dialog("Profile topic", list, list)
 	for _, topic := range choices {
 		list.AddItem(tview.Escape(safe(topic, false)), "", 0, func() {
@@ -736,15 +779,8 @@ func (p *payloadPane) delimiterDialog() {
 			d.close()
 			p.refresh()
 		}
-		d.button("Apply", "Alt+A", apply)
+		d.button("Apply", "a", apply)
 		d.button("Cancel", "Esc", d.close)
-		d.keymap(func(e *tcell.EventKey) bool {
-			if alt(e) == 'a' {
-				apply()
-				return true
-			}
-			return false
-		})
 	})
 }
 func (p *payloadPane) editProfile(csv bool) {

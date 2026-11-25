@@ -2,6 +2,7 @@ package katui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -28,7 +29,7 @@ func (u *ui) dialog(title string, body tview.Primitive, initial tview.Primitive)
 		u.invalidateMonitor()
 	}
 	d := &dialog{u: u, id: fmt.Sprintf("modal-%d", u.modalID), body: body, previous: u.app.GetFocus()}
-	d.status = tview.NewTextView().SetTextColor(tcell.ColorLightGoldenrodYellow)
+	d.status = tview.NewTextView().SetDynamicColors(true).SetTextColor(tcell.ColorLightGoldenrodYellow)
 	d.footer = tview.NewFlex()
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).AddItem(body, 0, 1, true).AddItem(d.status, 2, 0, false).AddItem(d.footer, 1, 0, false)
 	d.root.SetBorder(true).SetTitle(" " + tview.Escape(safe(title, false)) + " ").SetBorderColor(u.accent)
@@ -59,14 +60,17 @@ func (d *dialog) close() {
 	}
 }
 func (d *dialog) say(text string) {
+	d.hint(tview.Escape(safe(text, true)))
+}
+func (d *dialog) hint(text string) {
 	if !d.closed {
-		d.status.SetText(safe(text, true))
+		d.status.SetText(text)
 	}
 }
-func (d *dialog) button(label string, action func()) *tview.Button {
-	b := tview.NewButton(label).SetSelectedFunc(action)
+func (d *dialog) button(label, key string, action func()) *tview.Button {
+	b := tview.NewButton(buttonLabel(label, key)).SetSelectedFunc(action)
 	d.buttons = append(d.buttons, b)
-	d.footer.AddItem(b, len([]rune(label))+2, 0, false)
+	d.footer.AddItem(b, tview.TaggedStringWidth(b.GetLabel())+2, 0, false)
 	return b
 }
 func (d *dialog) keymap(handle func(*tcell.EventKey) bool) {
@@ -181,8 +185,8 @@ func (u *ui) quit() {
 	text := tview.NewTextView().SetText("Quit Katui? Active readers will stop and buffered records will be discarded.").SetWordWrap(true)
 	d := u.dialog("Quit Katui", text, text)
 	yes := func() { u.app.Stop() }
-	d.button("Yes y", yes)
-	no := d.button("No n", d.close)
+	d.button("Yes", "y", yes)
+	no := d.button("No", "n", d.close)
 	u.app.SetFocus(no)
 	d.keymap(func(ev *tcell.EventKey) bool {
 		if ev.Key() != tcell.KeyRune {
@@ -201,41 +205,49 @@ func (u *ui) quit() {
 	})
 }
 func (u *ui) help() {
-	text := tview.NewTextView().SetScrollable(true).SetText(`1 / 2 / 3       Topics / Consumer Groups / Messages
-Tab / Shift+Tab Move focus
-Arrows / j / k  Navigate
-PageUp / Down   Page
-Enter           Open the selected row
-Esc             Back / close, or cancel a pending connection
-4               Kafka cluster management
-/               Search; Enter returns to results
-s / r           Sort / refresh
-z               Fullscreen / restore
-c               Start a read-only reader
-Ctrl+P          Command palette
-q               Quit confirmation
-
-Topics         h Internal topics · g Topic consumers
-               n Create · a Manage · d Delete
-Groups         a Manage selected group or partition
-Messages       b Records · i Inspector · m Mode · F4 Full payload
-               p Pause · x Stop · l Clear rolling buffer · f Follow latest
-               Space Check · a Check matching · w Compare · e Uncheck all
-               o CSV columns · u Protobuf · d Delimiter · h Header
-               y Copy Value · v Copy View · E Export
-Payload text   Drag or Shift+arrows Select · Ctrl+A Select all · Ctrl+C Copy
-Full payload   / Search · n Next match · p Previous match · L Load full
-               Esc cancels an active load
-
-Offsets are positions. Retained counts and rates are estimates.
-Read-only inspection does not join an application consumer group.`)
+	k := keyHint
+	lines := []string{
+		"Navigation",
+		k("1") + " Topics  " + k("2") + " Consumer Groups  " + k("3") + " Messages  " + k("4") + " Clusters",
+		k("Tab") + " / " + k("Shift+Tab") + " Move focus",
+		k("↑") + " " + k("↓") + " / " + k("j") + " " + k("k") + " Navigate  " + k("PageUp") + " / " + k("PageDown") + " Page",
+		"In tables, " + k("←/→") + " Scroll sideways  " + k("Ctrl+←/→") + " Scroll farther",
+		k("Enter") + " Open selection  " + k("Esc") + " Back or cancel",
+		k("/") + " Search  " + k("s") + " Sort  " + k("r") + " Refresh  " + k("z") + " Toggle fullscreen",
+		k("Ctrl+P") + " Commands  " + k("?") + " Help  " + k("q") + " Quit",
+		"",
+		"Kafka clusters",
+		k("↑") + " " + k("↓") + " Select  " + k("Enter") + " / " + k("c") + " Connect  " + k("e") + " Edit  " + k("n") + " New",
+		k("Alt+G") + " Connect from the editor  " + k("Esc") + " Back or cancel",
+		"",
+		"Topics and consumer groups",
+		k("h") + " Internal topics  " + k("g") + " Topic consumers",
+		k("n") + " Create topic  " + k("a") + " Manage  " + k("d") + " Delete topic  " + k("c") + " Start reader",
+		"",
+		"Messages and payloads",
+		k("b") + " Records  " + k("i") + " Inspector  " + k("m") + " Mode  " + k("F4") + " Full payload",
+		k("p") + " Pause  " + k("x") + " Stop  " + k("l") + " Clear buffer  " + k("f") + " Follow latest",
+		k("Space") + " Check  " + k("a") + " Check matching  " + k("w") + " Compare  " + k("e") + " Uncheck all",
+		k("o") + " CSV columns  " + k("u") + " Protobuf  " + k("d") + " Delimiter  " + k("h") + " Header",
+		k("y") + " Copy Value  " + k("v") + " Copy View  " + k("E") + " Export",
+		k("Shift+arrows") + " Select text  " + k("Ctrl+A") + " Select all  " + k("Ctrl+C") + " Copy selection",
+		"In payload text, " + k("←/→") + " Move cursor  " + k("Shift+←/→") + " Extend or shrink selection",
+		k("Alt+←/→") + " Pan 8 columns  " + k("Ctrl+←/→") + " Pan half the viewport (at least 8 columns)",
+		"In the tree, " + k("←/→") + " Collapse or expand nodes",
+		k("/") + " Find in Full view  " + k("n") + " Next  " + k("p") + " Previous  " + k("L") + " Load full",
+		"",
+		"Offsets are positions. Retained counts and rates are estimates.",
+		"Read-only inspection does not join an application consumer group.",
+	}
+	text := tview.NewTextView().SetDynamicColors(true).SetWordWrap(true).SetText(strings.Join(lines, "\n"))
 	text.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey { return u.viewerKeys(e, nil, text) })
 	d := u.dialog("Help", text, text)
-	d.button("Back Esc", d.close)
+	d.button("Back", "Esc", d.close)
 }
 func (u *ui) palette() {
-	list := tview.NewList().ShowSecondaryText(false)
+	list := tview.NewList().ShowSecondaryText(false).SetShortcutStyle(shortcutStyle())
 	d := u.dialog("Commands", list, list)
+	d.hint(keyHint("Enter") + " Run selected command  " + keyHint("Esc") + " Back")
 	add := func(label string, key rune, fn func()) { list.AddItem(label, "", key, func() { d.close(); fn() }) }
 	add("Topics", '1', func() { u.changeWorkspace(0) })
 	add("Consumer Groups", '2', func() { u.changeWorkspace(1) })
@@ -249,6 +261,7 @@ func (u *ui) palette() {
 func (u *ui) theme() {
 	list := tview.NewList().ShowSecondaryText(false)
 	d := u.dialog("Color theme", list, list)
+	d.hint(keyHint("Enter") + " Apply selected theme  " + keyHint("Esc") + " Back")
 	for _, theme := range []struct {
 		label string
 		color tcell.Color

@@ -314,24 +314,24 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 			p.rendering = false
 			p.result.incomplete = true
 			p.status.SetText("Loading canceled")
-			d.say("Press L to load again or Esc to close.")
+			d.hint(keyHint("L") + " Load again  " + keyHint("Esc") + " Close")
 			return
 		}
 		close()
 	}
 	if full {
-		d.button("Load full L", p.loadFull)
-		d.button("Prev p", func() { p.advance(-1) })
-		d.button("Next n", func() { p.advance(1) })
+		d.button("Load full", "L", p.loadFull)
+		d.button("Prev", "p", func() { p.advance(-1) })
+		d.button("Next", "n", func() { p.advance(1) })
 	} else {
-		d.button("Payloads 1", func() { p.showMetadata(false) })
-		d.button("Metadata 2", func() { p.showMetadata(true) })
-		d.button("Full F4", func() { u.payloadDialog(true, records, p.modeName) })
+		d.button("Payloads", "1", func() { p.showMetadata(false) })
+		d.button("Metadata", "2", func() { p.showMetadata(true) })
+		d.button("Full", "F4", func() { u.payloadDialog(true, records, p.modeName) })
 	}
-	d.button("Value y", p.copyValue)
-	d.button("View v", p.copyView)
-	d.button("Export E", p.exportValue)
-	d.button("Back Esc", close)
+	d.button("Value", "y", p.copyValue)
+	d.button("View", "v", p.copyView)
+	d.button("Export", "E", p.exportValue)
+	d.button("Back", "Esc", close)
 	d.keymap(func(ev *tcell.EventKey) bool {
 		if isEditing(u.app.GetFocus()) {
 			return false

@@ -168,7 +168,7 @@ type partitionSelector struct {
 
 func newPartitionSelector(u *ui) *partitionSelector {
 	s := &partitionSelector{list: tview.NewTable().SetSelectable(true, false), checked: map[partKey]bool{}}
-	s.list.SetBorder(true).SetTitle(" Partitions · Alt+P · Space ")
+	s.list.SetBorder(true).SetTitle(" Partitions · " + keyHint("Alt+P") + " · " + keyHint("Space") + " ")
 	s.list.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
 		if e.Key() == tcell.KeyRune && e.Rune() == ' ' {
 			row, _ := s.list.GetSelection()
@@ -234,15 +234,15 @@ func (u *ui) consume(topic string, id int32) {
 			stamp.SetDisabled(i != 3)
 		}
 	}
-	start := dropdown(form, "Start [Alt+S]", starts, opts.start, setStart)
-	recent = field(form, "Recent per partition [Alt+R]", strconv.FormatInt(opts.recent, 10))
-	stamp = field(form, "Timestamp [Alt+T]", opts.timestamp)
-	key := field(form, "Key filter [Alt+K]", opts.key)
-	keyOp := dropdown(form, "Key operator [Alt+O]", operators, opts.keyOp, nil)
-	value := field(form, "Value filter [Alt+V]", opts.value)
-	valueOp := dropdown(form, "Value operator [Alt+W]", operators, opts.valueOp, nil)
-	limit := field(form, "Matching limit [Alt+L]", strconv.FormatInt(opts.limit, 10))
-	follow := check(form, "Keep following [Alt+F]", opts.follow)
+	start := dropdown(form, buttonLabel("Start", "Alt+S"), starts, opts.start, setStart)
+	recent = field(form, buttonLabel("Recent per partition", "Alt+R"), strconv.FormatInt(opts.recent, 10))
+	stamp = field(form, buttonLabel("Timestamp", "Alt+T"), opts.timestamp)
+	key := field(form, buttonLabel("Key filter", "Alt+K"), opts.key)
+	keyOp := dropdown(form, buttonLabel("Key operator", "Alt+O"), operators, opts.keyOp, nil)
+	value := field(form, buttonLabel("Value filter", "Alt+V"), opts.value)
+	valueOp := dropdown(form, buttonLabel("Value operator", "Alt+W"), operators, opts.valueOp, nil)
+	limit := field(form, buttonLabel("Matching limit", "Alt+L"), strconv.FormatInt(opts.limit, 10))
+	follow := check(form, buttonLabel("Keep following", "Alt+F"), opts.follow)
 	setStart(opts.start)
 	split := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(selector.list, 0, 1, true).AddItem(form, 0, 2, false)
 	d := u.dialog("Consume · "+topic, split, selector.list)
@@ -302,15 +302,15 @@ func (u *ui) consume(topic string, id int32) {
 		u.refreshView()
 		u.focus(u.table)
 	}
-	d.button("All Alt+A", func() { selector.every(true) })
-	d.button("None Alt+N", func() { selector.every(false) })
+	d.button("All", "Alt+A", func() { selector.every(true) })
+	d.button("None", "Alt+N", func() { selector.every(false) })
 	ctx, cancel := context.WithTimeout(u.ctx, u.b.timeout)
 	d.cancel = func() {
 		cancel()
 		d.close()
 	}
-	d.button("Cancel", d.cancel)
-	goBtn := d.button("Go Alt+G", goRead).SetDisabled(true)
+	d.button("Cancel", "Esc", d.cancel)
+	goBtn := d.button("Go", "Alt+G", goRead).SetDisabled(true)
 	d.keymap(func(e *tcell.EventKey) bool {
 		if loading && e.Key() == tcell.KeyRune && e.Rune() == 'q' && e.Modifiers() == 0 && !isEditing(u.app.GetFocus()) {
 			d.cancel()

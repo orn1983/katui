@@ -17,7 +17,7 @@ type payloadPane struct {
 	u                                        *ui
 	root, bar, content                       *tview.Flex
 	dialog                                   *dialog
-	metadata, status                         *tview.TextView
+	metadata, navigation, status             *tview.TextView
 	viewer, nodeView                         *payloadText
 	document                                 payloadDocument
 	expanded                                 bool
@@ -47,21 +47,25 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	p.bar = tview.NewFlex()
 	p.content = tview.NewFlex().SetDirection(tview.FlexRow)
 	p.metadata = tview.NewTextView().SetTextColor(tcell.ColorSilver).SetScrollable(true).SetWrap(false)
-	p.status = tview.NewTextView().SetTextColor(tcell.ColorLightGoldenrodYellow)
+	p.status = tview.NewTextView().SetDynamicColors(true).SetTextColor(tcell.ColorLightGoldenrodYellow)
+	k := keyHint
+	p.navigation = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetText(
+		"Text  " + k("←/→") + " Cursor  " + k("Shift+←/→") + " Select\n" +
+			k("Alt+←/→") + " Pan 8  " + k("Ctrl+←/→") + " Pan half")
 	p.viewer = newPayloadText(p.copyText)
 	p.nodeView = newPayloadText(p.copyText)
 	p.tree = tview.NewTreeView()
-	p.mode = tview.NewDropDown().SetLabel("Mode m  ")
+	p.mode = tview.NewDropDown().SetLabel(buttonLabel("Mode", "m") + "  ")
 	p.mode.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
 		if p.mode.IsOpen() {
 			return u.viewerKeys(e, nil, nil)
 		}
 		return e
 	})
-	p.delimButton = tview.NewButton("Delimiter d").SetSelectedFunc(p.delimiterDialog)
-	p.headerButton = tview.NewButton("Header h").SetSelectedFunc(p.toggleHeader)
-	p.profileButton = tview.NewButton("Columns o").SetSelectedFunc(func() { p.editProfile(csvMode(p.modeName)) })
-	p.search = tview.NewInputField().SetLabel("Find /  ")
+	p.delimButton = tview.NewButton(buttonLabel("Delimiter", "d")).SetSelectedFunc(p.delimiterDialog)
+	p.headerButton = tview.NewButton(buttonLabel("Header", "h")).SetSelectedFunc(p.toggleHeader)
+	p.profileButton = tview.NewButton(buttonLabel("Columns", "o")).SetSelectedFunc(func() { p.editProfile(csvMode(p.modeName)) })
+	p.search = tview.NewInputField().SetLabel(buttonLabel("Find", "/") + "  ")
 	p.search.SetChangedFunc(func(string) { p.scheduleSearch() })
 	p.search.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter || key == tcell.KeyEscape {
@@ -132,10 +136,10 @@ func (p *payloadPane) rebuild() {
 	p.bar.AddItem(p.mode, 0, 1, true)
 	if csvMode(p.modeName) {
 		p.bar.AddItem(p.delimButton, 13, 0, false).AddItem(p.headerButton, 10, 0, false)
-		p.profileButton.SetLabel("Columns o")
+		p.profileButton.SetLabel(buttonLabel("Columns", "o"))
 		p.bar.AddItem(p.profileButton, 11, 0, false)
 	} else if protoMode(p.modeName) {
-		p.profileButton.SetLabel("Schema u")
+		p.profileButton.SetLabel(buttonLabel("Schema", "u"))
 		p.bar.AddItem(p.profileButton, 10, 0, false)
 	}
 	p.root.Clear()
@@ -153,7 +157,7 @@ func (p *payloadPane) rebuild() {
 	if p.full {
 		p.root.AddItem(p.search, 1, 0, false)
 	}
-	p.root.AddItem(p.status, 1, 0, false).AddItem(p.content, 0, 1, false)
+	p.root.AddItem(p.status, 1, 0, false).AddItem(p.content, 0, 1, false).AddItem(p.navigation, 2, 0, false)
 	p.layout()
 	if p.dialog != nil {
 		p.dialog.focusables = p.focusables()
@@ -315,7 +319,10 @@ func (p *payloadPane) refresh() {
 	limits := p.u.b.inspectionLimits(p.expanded)
 	release := p.u.holdPayloads(records)
 	p.rendering = true
-	p.status.SetText("Preparing payload… Esc cancels in Full view.")
+	p.status.SetText("Preparing payload…")
+	if p.full {
+		p.status.SetText("Preparing payload…  " + keyHint("Esc") + " Cancel")
+	}
 	go func() {
 		defer cancel()
 		result := p.u.preparePayload(ctx, records, preferences, mode, p.full, len(records) > 1 || p.comparison, limits)
@@ -333,12 +340,13 @@ func (p *payloadPane) refresh() {
 			p.rendering = false
 			p.result = result
 			p.document = doc
-			notice := safe(strings.ReplaceAll(result.warning, "\n", " · "), false)
+			notice := tview.Escape(safe(strings.ReplaceAll(result.warning, "\n", " · "), false))
 			if p.full && result.canExpand && !p.expanded {
-				notice = "L Load full · " + notice
+				notice = keyHint("L") + " Load full · " + notice
 			}
 			if notice == "" && p.dialog == nil {
-				notice = "Drag or Shift+arrows selects · y Value · v View · E Export · F4 Full"
+				k := keyHint
+				notice = k("Shift+arrows") + " Select · " + k("y") + " Value · " + k("v") + " View · " + k("E") + " Export · " + k("F4") + " Full"
 			}
 			p.status.SetText(notice)
 			if p.dialog != nil && result.warning != "" {
@@ -466,18 +474,18 @@ func (p *payloadPane) loadFull() {
 		p.notice("Load already in progress. Esc cancels.")
 		return
 	}
-	text := tview.NewTextView().SetWordWrap(true).SetText(
+	text := tview.NewTextView().SetDynamicColors(true).SetWordWrap(true).SetText(
 		"Load and parse the retained values with up to 128 MiB of input and 128 MiB of displayed text. " +
 			"CSV remains limited to 50,000 rows and 256 columns. Trees keep up to 50,000 nodes and 128 levels per record. " +
-			"Large structured payloads can use substantially more memory. Esc cancels loading.")
+			"Large structured payloads can use substantially more memory. " + keyHint("Esc") + " cancels loading.")
 	d := p.u.dialog("Load full payload", text, text)
 	load := func() {
 		d.close()
 		p.expanded = true
 		p.refresh()
 	}
-	d.button("Load y", load)
-	cancel := d.button("Cancel Esc", d.close)
+	d.button("Load", "y", load)
+	cancel := d.button("Cancel", "Esc", d.close)
 	p.u.app.SetFocus(cancel)
 	d.keymap(func(e *tcell.EventKey) bool {
 		if e.Key() == tcell.KeyRune && e.Rune() == 'y' {
@@ -595,7 +603,7 @@ func (p *payloadPane) advance(change int) {
 	if p.matchesLimited {
 		suffix = "+"
 	}
-	p.status.SetText(fmt.Sprintf("Match %d / %d%s  ·  n next / p previous", p.match+1, total, suffix))
+	p.status.SetText(fmt.Sprintf("Match %d / %d%s  ·  ", p.match+1, total, suffix) + keyHint("n") + " Next  " + keyHint("p") + " Previous")
 	if len(p.treeMatches) > 0 {
 		node := p.treeMatches[p.match]
 		path := []*payloadNode{node}
@@ -680,7 +688,7 @@ func (p *payloadPane) chooseTopic(action func(string)) {
 			}
 		})
 	}
-	d.button("Cancel", d.close)
+	d.button("Cancel", "Esc", d.close)
 }
 func (p *payloadPane) activeTopic(action func(string)) {
 	if p.profileTopic != "" {
@@ -728,8 +736,8 @@ func (p *payloadPane) delimiterDialog() {
 			d.close()
 			p.refresh()
 		}
-		d.button("Apply Alt+A", apply)
-		d.button("Cancel", d.close)
+		d.button("Apply", "Alt+A", apply)
+		d.button("Cancel", "Esc", d.close)
 		d.keymap(func(e *tcell.EventKey) bool {
 			if alt(e) == 'a' {
 				apply()

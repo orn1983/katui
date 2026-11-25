@@ -12,30 +12,119 @@ import (
 )
 
 const maxPayloadLines = 1_000_000
+const columnCheckpointBytes = 256
+
+type payloadColumn struct {
+	byteOffset int
+	cell       int
+}
 
 type payloadDocument struct {
 	text  string
 	lines []int // byte offsets of physical line starts
+	width int
+	// Only long lines that require grapheme measurement need checkpoints.
+	columns map[int][]payloadColumn
 }
 
 func indexPayloadText(ctx context.Context, text string) (payloadDocument, bool) {
 	d := payloadDocument{text: text, lines: []int{0}}
-	for from := 0; from < len(text); {
-		if len(d.lines)%4096 == 0 && ctx.Err() != nil {
+	for from := 0; ; {
+		if ctx.Err() != nil {
 			return payloadDocument{}, false
 		}
-		i := strings.IndexByte(text[from:], '\n')
-		if i < 0 {
+		end := len(text)
+		newline := strings.IndexByte(text[from:], '\n')
+		if newline >= 0 {
+			end = from + newline
+		}
+		row := len(d.lines) - 1
+		width, points := indexPayloadLine(ctx, text[from:end])
+		d.width = max(d.width, width)
+		if points != nil {
+			if d.columns == nil {
+				d.columns = map[int][]payloadColumn{}
+			}
+			d.columns[row] = points
+		}
+		if newline < 0 {
 			break
 		}
 		if len(d.lines) == maxPayloadLines {
-			d.text = text[:from+i]
+			d.text = text[:end]
 			return d, true
 		}
-		from += i + 1
+		from = end + 1
 		d.lines = append(d.lines, from)
 	}
 	return d, false
+}
+
+func graphemeWidth(g *uniseg.Graphemes) int {
+	if g.Str() == "\t" {
+		return 4
+	}
+	return max(1, g.Width())
+}
+
+func indexPayloadLine(ctx context.Context, text string) (int, []payloadColumn) {
+	for i := 0; i < len(text); i++ {
+		if i%32768 == 0 && ctx.Err() != nil {
+			return 0, nil
+		}
+		if text[i] < ' ' || text[i] >= utf8.RuneSelf {
+			width := 0
+			var points []payloadColumn
+			if len(text) > columnCheckpointBytes {
+				points = []payloadColumn{{}}
+			}
+			g := uniseg.NewGraphemes(text)
+			for g.Next() {
+				start, _ := g.Positions()
+				if len(points) != 0 && start-points[len(points)-1].byteOffset >= columnCheckpointBytes {
+					if ctx.Err() != nil {
+						return 0, nil
+					}
+					points = append(points, payloadColumn{start, width})
+				}
+				width += graphemeWidth(g)
+			}
+			return width, points
+		}
+	}
+	return len(text), nil
+}
+
+// position finds the start of the grapheme at a byte offset or display cell.
+// Long ASCII lines need no index and long mixed lines scan from a checkpoint.
+func (d payloadDocument) position(row int, line string, target int, byCell bool) payloadColumn {
+	points := d.columns[row]
+	if len(line) > columnCheckpointBytes && len(points) == 0 {
+		i := min(len(line), target)
+		return payloadColumn{i, i}
+	}
+	pos := payloadColumn{}
+	if len(points) != 0 {
+		i := sort.Search(len(points), func(i int) bool {
+			if byCell {
+				return points[i].cell > target
+			}
+			return points[i].byteOffset > target
+		})
+		pos = points[i-1]
+	}
+	base := pos.byteOffset
+	g := uniseg.NewGraphemes(line[base:])
+	for g.Next() {
+		_, end := g.Positions()
+		width := graphemeWidth(g)
+		if byCell && pos.cell+width > target || !byCell && base+end > target {
+			break
+		}
+		pos.byteOffset = base + end
+		pos.cell += width
+	}
+	return pos
 }
 
 // payloadText is a read-only viewport. Rendering or selecting a small region
@@ -100,49 +189,36 @@ func (v *payloadText) ensureVisible() {
 	} else if h > 0 && row >= v.top+h {
 		v.top = row - h + 1
 	}
-	column := v.cursor - v.doc.lines[row]
+	start, end := v.line(row)
+	column := v.doc.position(row, v.doc.text[start:end], v.cursor-start, false).cell
 	if column < v.left {
 		v.left = column
-	} else if w > 0 {
-		start, end := v.line(row)
-		left := runeStart(v.doc.text[start:end], min(v.left, end-start))
-		distance := column - left
-		// A UTF-8 byte count bounds normal cell width. Measure only
-		// nearby text to keep search jumps across long lines cheap.
-		nearby := v.doc.text[start+left : v.cursor]
-		if distance >= 4*w || uniseg.StringWidth(nearby)+4*strings.Count(nearby, "\t") >= w {
-			v.left = max(0, column-(w-1)/4)
-		}
+	} else if w > 0 && column >= v.left+w {
+		v.left = max(0, column-w/2)
 	}
+}
+
+func (v *payloadText) maxLeft(width int) int {
+	// Include the cursor position just after the last grapheme.
+	return max(0, v.doc.width+1-max(1, width))
 }
 
 func (v *payloadText) offsetAt(row, column int) int {
 	start, end := v.line(row)
-	at := start + runeStart(v.doc.text[start:end], min(v.left, end-start))
-	g := uniseg.NewGraphemes(v.doc.text[at:end])
-	for g.Next() {
-		w := g.Width()
-		if g.Str() == "\t" {
-			w = 4
-		}
-		if column < max(1, w) {
-			a, _ := g.Positions()
-			return at + a
-		}
-		column -= max(1, w)
-	}
-	return end
+	return start + v.doc.position(row, v.doc.text[start:end], v.left+column, true).byteOffset
 }
 
 func (v *payloadText) Draw(screen tcell.Screen) {
 	v.Box.DrawForSubclass(screen, v)
 	x, y, w, h := v.GetInnerRect()
+	v.left = min(v.left, v.maxLeft(w))
 	selectionLow, selectionHigh := min(v.anchor, v.cursor), max(v.anchor, v.cursor)
 	for row := v.top; row < min(v.top+h, len(v.doc.lines)); row++ {
 		start, end := v.line(row)
-		at := start + runeStart(v.doc.text[start:end], min(v.left, end-start))
+		pos := v.doc.position(row, v.doc.text[start:end], v.left, true)
+		at := start + pos.byteOffset
 		g := uniseg.NewGraphemes(v.doc.text[at:end])
-		col := 0
+		col := pos.cell - v.left
 		for col < w && g.Next() {
 			a, b := g.Positions()
 			style := tcell.StyleDefault
@@ -156,22 +232,18 @@ func (v *payloadText) Draw(screen tcell.Screen) {
 			case v.HasFocus() && at+a == v.cursor:
 				style = style.Reverse(true)
 			}
+			width := graphemeWidth(g)
 			if g.Str() == "\t" {
-				for range min(4, w-col) {
-					screen.SetContent(x+col, y+row-v.top, ' ', nil, style)
-					col++
+				for i := max(0, col); i < min(col+width, w); i++ {
+					screen.SetContent(x+i, y+row-v.top, ' ', nil, style)
 				}
-				continue
+			} else if col >= 0 && col+width <= w {
+				runes := g.Runes()
+				screen.SetContent(x+col, y+row-v.top, runes[0], runes[1:], style)
 			}
-			width := max(1, g.Width())
-			if width > w-col {
-				break
-			}
-			runes := g.Runes()
-			screen.SetContent(x+col, y+row-v.top, runes[0], runes[1:], style)
 			col += width
 		}
-		if v.HasFocus() && end == v.cursor && col < w {
+		if v.HasFocus() && end == v.cursor && col >= 0 && col < w {
 			screen.SetContent(x+col, y+row-v.top, ' ', nil, tcell.StyleDefault.Reverse(true))
 		}
 	}
@@ -179,6 +251,19 @@ func (v *payloadText) Draw(screen tcell.Screen) {
 
 func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) {
 	return v.WrapInputHandler(func(event *tcell.EventKey, _ func(tview.Primitive)) {
+		key, mod := event.Key(), event.Modifiers()
+		if (key == tcell.KeyLeft || key == tcell.KeyRight) && mod&(tcell.ModAlt|tcell.ModCtrl) != 0 {
+			_, _, width, _ := v.GetInnerRect()
+			delta := 8
+			if mod&tcell.ModCtrl != 0 {
+				delta = max(delta, width/2)
+			}
+			if key == tcell.KeyLeft {
+				delta = -delta
+			}
+			v.left = max(0, min(v.maxLeft(width), v.left+delta))
+			return
+		}
 		cursor := v.cursor
 		row := v.row(cursor)
 		start, end := v.line(row)

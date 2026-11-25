@@ -154,9 +154,9 @@ func (u *ui) run() error {
 	}()
 	u.header = tview.NewTextView().SetTextColor(u.accent)
 	u.tabs = tview.NewTextView().SetDynamicColors(true)
-	u.controls = tview.NewTextView()
-	u.status = tview.NewTextView().SetTextColor(tcell.ColorSilver).SetWrap(false)
-	u.search = tview.NewInputField().SetLabel("Search /  ")
+	u.controls = tview.NewTextView().SetDynamicColors(true).SetWordWrap(true)
+	u.status = tview.NewTextView().SetDynamicColors(true).SetTextColor(tcell.ColorSilver).SetWrap(false)
+	u.search = tview.NewInputField().SetLabel(buttonLabel("Search", "/") + "  ")
 	u.search.SetChangedFunc(func(value string) { u.current().filter = value; u.refreshView() })
 	u.search.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter || key == tcell.KeyEscape {
@@ -696,27 +696,35 @@ func (u *ui) refreshView() {
 		header += fmt.Sprintf("  ·  %s  ·  poll %s", safe(u.b.cluster, false), u.b.interval)
 	}
 	u.header.SetText(header)
-	labels := []string{"1 Topics", "2 Consumer Groups", "3 Messages"}
+	k := keyHint
+	labels := []string{"Topics", "Consumer Groups", "Messages"}
 	for i, label := range labels {
 		if i == u.workspace {
-			labels[i] = "[black:lightskyblue:b] " + label + " [-:-:-]"
-		} else {
-			labels[i] = " " + label + " "
+			label = "[black:" + u.accent.String() + ":b] " + label + " [-:-:-]"
 		}
+		labels[i] = k(strconv.Itoa(i+1)) + " " + label
 	}
-	u.tabs.SetText(strings.Join(labels, "  ") + "   4 Clusters")
+	u.tabs.SetText(strings.Join(labels, "  ") + "   " + k("4") + " Clusters")
+	open, back, manage := k("Enter")+" Open", k("Esc")+" Back", k("a")+" Manage"
+	partitions, consume, consumers := k("Enter")+" Partition", k("c")+" Consume", k("g")+" Consumers"
+	sortRefresh := k("s") + " Sort  " + k("r") + " Refresh"
 	actions := map[string]string{
-		"topics":       "Enter Open   g Consumers   c Consume   a Manage   n Create   d Delete   h Internal",
-		"topic":        "Esc Back   Enter Partition   g Consumers   c Consume   a Manage   d Delete",
-		"topic-detail": "Esc Back   g Consumers   c Consume   a Manage   d Delete",
-		"groups":       "Enter Open group   a Manage   s Sort   r Refresh",
-		"picker":       "Esc Back   Enter Open group   / Search   s Sort   r Refresh",
-		"group":        "Esc Back   Enter Partition   a Manage   c Consume   s Sort",
-		"group-detail": "Esc Back   a Manage   c Consume   r Refresh",
-		"messages":     "Esc Back  c Consume  p Pause  x Stop  l Clear  f Follow  w Checked  e Uncheck",
+		"topics":       strings.Join([]string{open, consumers, consume, manage, k("n") + " Create", k("d") + " Delete", k("h") + " Internal"}, "  "),
+		"topic":        strings.Join([]string{back, partitions, consumers, consume, manage, k("d") + " Delete"}, "  "),
+		"topic-detail": strings.Join([]string{back, consumers, consume, manage, k("d") + " Delete"}, "  "),
+		"groups":       open + " group  " + manage + "  " + sortRefresh,
+		"picker":       back + "  " + open + " group  " + k("/") + " Search  " + sortRefresh,
+		"group":        strings.Join([]string{back, partitions, manage, consume, k("s") + " Sort"}, "  "),
+		"group-detail": strings.Join([]string{back, manage, consume, k("r") + " Refresh"}, "  "),
+		"messages":     strings.Join([]string{back, consume, k("p") + " Pause", k("x") + " Stop", k("l") + " Clear", k("f") + " Follow", k("w") + " Compare", k("e") + " Uncheck"}, "  "),
 	}
-	u.controls.SetText(actions[loc.kind])
-	layout := fmt.Sprintf("%s/%s/%t", loc.kind, u.fullscreen, u.width < 100)
+	controls := actions[loc.kind]
+	u.controls.SetText(controls)
+	controlRows := 1
+	if u.width > 0 && tview.TaggedStringWidth(controls) > u.width {
+		controlRows = 2
+	}
+	layout := fmt.Sprintf("%s/%s/%t/%d", loc.kind, u.fullscreen, u.width < 100, controlRows)
 	if layout != u.layout {
 		u.layout = layout
 		u.body.Clear()
@@ -726,7 +734,7 @@ func (u *ui) refreshView() {
 		}
 		u.shell.Clear().AddItem(u.header, 1, 0, false)
 		if u.fullscreen == "" {
-			u.shell.AddItem(u.tabs, 1, 0, false).AddItem(u.controls, 1, 0, false).AddItem(u.search, 1, 0, false)
+			u.shell.AddItem(u.tabs, 1, 0, false).AddItem(u.controls, controlRows, 0, false).AddItem(u.search, 1, 0, false)
 		}
 		u.shell.AddItem(u.body, 0, 1, true).AddItem(u.status, statusRows, 0, false)
 		if loc.kind == "messages" {

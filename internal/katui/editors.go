@@ -18,9 +18,9 @@ func (p *payloadPane) csvEditor(topic string) {
 	u := p.u
 	profile := u.profile(topic)
 	form := tview.NewForm().SetItemPadding(0)
-	names := tview.NewTextArea().SetLabel("Names [Alt+C]").SetText(strings.Join(profile.Columns, "\n"), true).SetSize(5, 0)
+	names := tview.NewTextArea().SetLabel(buttonLabel("Names", "Alt+C")).SetText(strings.Join(profile.Columns, "\n"), true).SetSize(5, 0)
 	form.AddFormItem(names)
-	save := check(form, "Save preference [Alt+S]", false)
+	save := check(form, buttonLabel("Save preference", "Alt+S"), false)
 	preview := tview.NewTextView().SetScrollable(true).SetWrap(false)
 	preview.SetBorder(true).SetTitle(" Pivot preview ")
 	body := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(form, 8, 0, true).AddItem(preview, 0, 1, false)
@@ -87,8 +87,8 @@ func (p *payloadPane) csvEditor(topic string) {
 		d.close()
 		p.refresh()
 	}
-	d.button("Apply Alt+A", apply)
-	d.button("Cancel", d.close)
+	d.button("Apply", "Alt+A", apply)
+	d.button("Cancel", "Esc", d.close)
 	d.keymap(func(e *tcell.EventKey) bool {
 		switch alt(e) {
 		case 'c':
@@ -128,13 +128,13 @@ func (p *payloadPane) protoEditor(topic string) {
 		current = *profile.Protobuf
 	}
 	form := tview.NewForm().SetItemPadding(0)
-	path := field(form, "Schema path [Alt+P]", current.Path)
+	path := field(form, buttonLabel("Schema path", "Alt+P"), current.Path)
 	folders := tview.NewTextArea().SetLabel("Import folders").SetText(strings.Join(current.Include, "\n"), true).SetSize(4, 0)
 	form.AddFormItem(folders)
-	types := dropdown(form, "Message [Alt+M]", nil, -1, nil)
+	types := dropdown(form, buttonLabel("Message", "Alt+M"), nil, -1, nil)
 	types.SetDisabled(true)
-	framing := dropdown(form, "Wire format [Alt+F]", []string{"Raw", "Confluent prefix"}, indexOf([]string{"raw", "confluent"}, current.Framing), nil)
-	save := check(form, "Save preference [Alt+S]", false)
+	framing := dropdown(form, buttonLabel("Wire format", "Alt+F"), []string{"Raw", "Confluent prefix"}, indexOf([]string{"raw", "confluent"}, current.Framing), nil)
+	save := check(form, buttonLabel("Save preference", "Alt+S"), false)
 	d := u.dialog("Protobuf schema · "+topic, form, form)
 	var schema *loadedSchema
 	var generation uint64
@@ -231,11 +231,11 @@ func (p *payloadPane) protoEditor(topic string) {
 		}
 		d.close()
 	}
-	d.button("Browse Alt+B", browse)
-	d.button("Add folder Alt+I", addFolder)
-	loadButton = d.button("Load Alt+L", load)
-	applyButton = d.button("Apply Alt+A", apply).SetDisabled(true)
-	d.button("Cancel", d.cancel)
+	d.button("Browse", "Alt+B", browse)
+	d.button("Add folder", "Alt+I", addFolder)
+	loadButton = d.button("Load", "Alt+L", load)
+	applyButton = d.button("Apply", "Alt+A", apply).SetDisabled(true)
+	d.button("Cancel", "Esc", d.cancel)
 	d.keymap(func(e *tcell.EventKey) bool {
 		switch alt(e) {
 		case 'p':
@@ -293,9 +293,10 @@ type filePicker struct {
 
 func (u *ui) fileBrowser(picker filePicker, pick func(string)) {
 	folderMode := picker.accept == nil
-	path := tview.NewInputField().SetLabel("Path [Alt+P] ")
-	filter := tview.NewInputField().SetLabel("Filter [Alt+F] ")
+	path := tview.NewInputField().SetLabel(buttonLabel("Path", "Alt+P") + " ")
+	filter := tview.NewInputField().SetLabel(buttonLabel("Filter", "Alt+F") + " ")
 	table := tview.NewTable().SetFixed(1, 0).SetSelectable(true, false)
+	table.SetBorder(true).SetTitle(" " + buttonLabel("Files", "Alt+B") + " ")
 	preview := tview.NewTextView().SetScrollable(true)
 	body := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(path, 1, 0, false).AddItem(filter, 1, 0, false).AddItem(table, 0, 1, true).AddItem(preview, 2, 0, false)
 	d := u.dialog(picker.title, body, table)
@@ -498,20 +499,30 @@ func (u *ui) fileBrowser(picker filePicker, pick func(string)) {
 		}
 	}
 	home := func() { name, _ := os.UserHomeDir(); browse(name) }
-	d.button("Open Alt+O", open)
-	if folderMode {
-		d.button("Choose folder", chooseFolder)
+	up := func() {
+		if here != "" {
+			browse(filepath.Dir(here))
+		}
 	}
-	d.button("Home Alt+H", home)
-	d.button("Cancel", d.close)
+	toggleHidden := func() {
+		hidden = !hidden
+		redraw()
+		d.say(fmt.Sprintf("Show hidden files %t", hidden))
+	}
+	d.button("Open", "Alt+O", open)
+	if folderMode {
+		d.button("Choose folder", "", chooseFolder)
+	}
+	d.button("Up", "Alt+U", up)
+	d.button("Home", "Alt+H", home)
+	d.button("Hidden", "Alt+D", toggleHidden)
+	d.button("Back", "Esc", d.close)
 	d.keymap(func(e *tcell.EventKey) bool {
 		switch alt(e) {
 		case 'o':
 			open()
 		case 'u':
-			if here != "" {
-				browse(filepath.Dir(here))
-			}
+			up()
 		case 'h':
 			home()
 		case 'p':
@@ -521,9 +532,7 @@ func (u *ui) fileBrowser(picker filePicker, pick func(string)) {
 		case 'b':
 			u.app.SetFocus(table)
 		case 'd':
-			hidden = !hidden
-			redraw()
-			d.say(fmt.Sprintf("Show hidden files %t", hidden))
+			toggleHidden()
 		default:
 			return false
 		}

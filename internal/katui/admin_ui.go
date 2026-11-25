@@ -20,22 +20,22 @@ func (u *ui) topicForm(topic, initial string) {
 	}
 	var d *dialog
 	var render func()
-	op := dropdown(form, "Operation [Alt+O]", operations, indexOf(operations, initial), func(int) {
+	op := dropdown(form, buttonLabel("Operation", "Alt+O"), operations, indexOf(operations, initial), func(int) {
 		if render != nil {
 			render()
 		}
 	})
-	name := field(form, "Name [Alt+N]", topic)
+	name := field(form, buttonLabel("Name", "Alt+N"), topic)
 	name.SetDisabled(initial != opCreate)
-	partitions := field(form, "Partitions [Alt+P]", "1")
-	replicas := field(form, "Replicas [Alt+R]", "1")
+	partitions := field(form, buttonLabel("Partitions", "Alt+P"), "1")
+	replicas := field(form, buttonLabel("Replicas", "Alt+R"), "1")
 	partitions.SetDisabled(initial != opCreate)
 	replicas.SetDisabled(initial != opCreate)
-	key := field(form, "Setting key [Alt+K]", "")
-	value := field(form, "Setting value [Alt+V]", "")
-	search := tview.NewInputField().SetLabel("Settings [Alt+/] ")
+	key := field(form, buttonLabel("Setting key", "Alt+K"), "")
+	value := field(form, buttonLabel("Setting value", "Alt+V"), "")
+	search := tview.NewInputField().SetLabel(buttonLabel("Settings", "Alt+/") + " ")
 	table := tview.NewTable().SetFixed(1, 0).SetSelectable(true, false)
-	table.SetBorder(true).SetTitle(" Current settings · Alt+B ")
+	table.SetBorder(true).SetTitle(" " + buttonLabel("Current settings", "Alt+B") + " ")
 	stagedText := tview.NewTextView().SetScrollable(true).SetWrap(false)
 	stagedText.SetBorder(true).SetTitle(" Staged settings ")
 	side := tview.NewFlex().SetDirection(tview.FlexRow)
@@ -187,11 +187,11 @@ func (u *ui) topicForm(topic, initial string) {
 		}
 		u.prepareReview(d, in, &busy, reviewButton)
 	}
-	d.button("Stage Alt+S", func() { stage(false) })
-	d.button("Default Alt+D", func() { stage(true) })
-	d.button("Unstage Alt+U", unstage)
-	reviewButton = d.button("Review Alt+G", review)
-	d.button("Cancel", d.close)
+	d.button("Stage", "Alt+S", func() { stage(false) })
+	d.button("Default", "Alt+D", func() { stage(true) })
+	d.button("Unstage", "Alt+U", unstage)
+	reviewButton = d.button("Review", "Alt+G", review)
+	d.button("Cancel", "Esc", d.close)
 	render = func() {
 		_, operation := op.GetCurrentOption()
 		edit := operation != opDeleteTopic
@@ -300,18 +300,18 @@ func (u *ui) groupForm(group, scope, topic string, partition int32) {
 		body.SetDirection(tview.FlexColumn)
 	}
 	var render func()
-	op := dropdown(form, "Operation [Alt+O]", []string{opReset, opRebalance, opDeleteGroup}, 0, func(int) {
+	op := dropdown(form, buttonLabel("Operation", "Alt+O"), []string{opReset, opRebalance, opDeleteGroup}, 0, func(int) {
 		if render != nil {
 			render()
 		}
 	})
 	var value *tview.InputField
-	mode := dropdown(form, "Mode [Alt+M]", []string{"Timestamp", "Absolute offset", "Earliest retained", "Latest"}, 0, func(i int) {
+	mode := dropdown(form, buttonLabel("Mode", "Alt+M"), []string{"Timestamp", "Absolute offset", "Earliest retained", "Latest"}, 0, func(i int) {
 		if value != nil {
 			value.SetDisabled(i >= 2)
 		}
 	})
-	value = field(form, "Value [Alt+V]", "")
+	value = field(form, buttonLabel("Value", "Alt+V"), "")
 	d := u.dialog("Manage group · "+group, body, form)
 	notice := tview.NewTextView().SetWordWrap(true)
 	selector.changed = func() {
@@ -332,10 +332,10 @@ func (u *ui) groupForm(group, scope, topic string, partition int32) {
 		}
 		u.prepareReview(d, in, &busy, reviewButton)
 	}
-	all := d.button("All Alt+A", func() { selector.every(true) })
-	none := d.button("None Alt+N", func() { selector.every(false) })
-	reviewButton = d.button("Review Alt+G", review)
-	d.button("Cancel", d.close)
+	all := d.button("All", "Alt+A", func() { selector.every(true) })
+	none := d.button("None", "Alt+N", func() { selector.every(false) })
+	reviewButton = d.button("Review", "Alt+G", review)
+	d.button("Cancel", "Esc", d.close)
 	render = func() {
 		_, operation := op.GetCurrentOption()
 		reset := operation == opReset
@@ -479,7 +479,7 @@ func (u *ui) adminReview(plan adminPlan) {
 			sent, err := u.b.applyAdmin(ctx, plan)
 			u.post(func() {
 				inFlight = false
-				cancelButton.SetDisabled(false).SetLabel("Back Esc")
+				cancelButton.SetDisabled(false).SetLabel(buttonLabel("Back", "Esc"))
 				u.app.SetFocus(cancelButton)
 				if err != nil {
 					outcome := "Review rejected. "
@@ -510,8 +510,8 @@ func (u *ui) adminReview(plan adminPlan) {
 			d.close()
 		}
 	}
-	applyButton = d.button("Apply Alt+A", apply).SetDisabled(true)
-	cancelButton = d.button("Cancel", d.cancel)
+	applyButton = d.button("Apply", "Alt+A", apply).SetDisabled(true)
+	cancelButton = d.button("Cancel", "Esc", d.cancel)
 	confirmation.SetChangedFunc(func(value string) {
 		if !attempted {
 			applyButton.SetDisabled(value != plan.target)

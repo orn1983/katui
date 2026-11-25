@@ -340,6 +340,20 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 		p.viewer.selectBy(p.viewer.match[0], false)
 		p.viewer.selectBy(p.viewer.match[1], true)
 	})
+	var left, anchor, cursor, pan int
+	u.post(func() {
+		left, anchor, cursor = p.viewer.left, p.viewer.anchor, p.viewer.cursor
+		_, _, width, _ := p.viewer.GetInnerRect()
+		pan = 8 + max(8, width/2)
+	})
+	for _, mod := range []tcell.ModMask{tcell.ModAlt, tcell.ModCtrl} {
+		if err := screen.PostEvent(tcell.NewEventKey(tcell.KeyLeft, 0, mod)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor("Full view did not pan independently of its selection", func() bool {
+		return p.viewer.left == left-pan && p.viewer.anchor == anchor && p.viewer.cursor == cursor
+	})
 	if err := screen.PostEvent(tcell.NewEventKey(tcell.KeyCtrlC, 0, tcell.ModCtrl)); err != nil {
 		t.Fatal(err)
 	}
@@ -350,5 +364,100 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("Ctrl+C did not copy the selected search result")
+	}
+}
+
+func TestPayloadTextPansWithoutChangingSelection(t *testing.T) {
+	var copied string
+	view := newPayloadText(func(text string) { copied = text })
+	content := strings.Repeat("0123456789", 40) + "\t" + strings.Repeat("字😀", 150) + "end"
+	doc, _ := indexPayloadText(t.Context(), "short\n"+content)
+	if doc.width != 1007 {
+		t.Fatalf("document is %d display columns, want 1007", doc.width)
+	}
+	view.setDocument(doc)
+	view.SetRect(0, 0, 40, 3)
+	key := func(k tcell.Key, mod tcell.ModMask) {
+		view.InputHandler()(tcell.NewEventKey(k, 0, mod), nil)
+	}
+	key(tcell.KeyDown, 0)
+	key(tcell.KeyRight, tcell.ModAlt)
+	if view.left != 8 || view.cursor != len("short\n") || view.anchor != view.cursor {
+		t.Fatal("Alt+Right did not pan eight columns while keeping the unselected cursor")
+	}
+	// Cursor movement after a pan deliberately follows the cursor again.
+	key(tcell.KeyRight, 0)
+	key(tcell.KeyRight, tcell.ModShift)
+	key(tcell.KeyRight, tcell.ModShift)
+	anchor, cursor := view.anchor, view.cursor
+	key(tcell.KeyLeft, tcell.ModAlt)
+	key(tcell.KeyRight, tcell.ModAlt)
+	key(tcell.KeyRight, tcell.ModCtrl)
+	if view.left != 28 || view.anchor != anchor || view.cursor != cursor {
+		t.Fatalf("pan changed selection or used the wrong width: left=%d, selection=%d–%d", view.left, view.anchor, view.cursor)
+	}
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer screen.Fini()
+	view.Draw(screen)
+	if char, _, _, _ := screen.GetContent(0, 1); char != '8' || view.left != 28 {
+		t.Fatalf("drawing snapped back or drew the wrong column: %q at left=%d", char, view.left)
+	}
+	key(tcell.KeyCtrlC, tcell.ModCtrl)
+	if copied != "12" {
+		t.Fatalf("copy after pan returned %q", copied)
+	}
+
+	for range 100 {
+		key(tcell.KeyRight, tcell.ModCtrl)
+	}
+	if view.left != 968 {
+		t.Fatalf("right boundary = %d", view.left)
+	}
+	view.SetRect(0, 0, 60, 3)
+	view.Draw(screen)
+	if view.left != 948 {
+		t.Fatalf("resizing did not clamp the viewport: %d", view.left)
+	}
+	key(tcell.KeyLeft, tcell.ModCtrl)
+	if view.left != 918 {
+		t.Fatalf("pan did not adapt to the new width: %d", view.left)
+	}
+	view.SetRect(0, 0, 12, 3)
+	key(tcell.KeyLeft, tcell.ModCtrl)
+	if view.left != 910 {
+		t.Fatalf("narrow terminal did not retain the minimum eight-column pan: %d", view.left)
+	}
+	for range 130 {
+		key(tcell.KeyLeft, tcell.ModCtrl)
+	}
+	if view.left != 0 {
+		t.Fatalf("left boundary = %d", view.left)
+	}
+
+	view.left = 8
+	mouse := func(x int, action tview.MouseAction, button tcell.ButtonMask) {
+		view.MouseHandler()(action, tcell.NewEventMouse(x, 1, button, 0), func(tview.Primitive) {})
+	}
+	mouse(0, tview.MouseLeftDown, tcell.Button1)
+	mouse(3, tview.MouseMove, tcell.Button1)
+	mouse(3, tview.MouseLeftUp, tcell.ButtonNone)
+	key(tcell.KeyLeft, tcell.ModShift)
+	key(tcell.KeyCtrlC, tcell.ModCtrl)
+	if copied != "89" {
+		t.Fatalf("mouse selection and Shift+Left after pan copied %q", copied)
+	}
+	key(tcell.KeyCtrlA, tcell.ModCtrl)
+	key(tcell.KeyLeft, tcell.ModAlt)
+	key(tcell.KeyCtrlC, tcell.ModCtrl)
+	if copied != doc.text {
+		t.Fatal("pan changed the Select All region")
+	}
+	start, end := view.line(1)
+	point := doc.position(1, doc.text[start:end], 805, true)
+	if point.cell != 804 || doc.text[start+point.byteOffset:start+point.byteOffset+3] != "字" {
+		t.Fatalf("mixed Unicode and tab columns were misaligned: %+v", point)
 	}
 }

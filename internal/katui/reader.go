@@ -154,6 +154,9 @@ func saveRecord(r *kgo.Record, store *payloadStore) (*storedRecord, error) {
 func timestamp(text string) (time.Time, error) {
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02 15:04:05", "2006-01-02"} {
 		if at, err := time.Parse(layout, strings.TrimSpace(text)); err == nil {
+			if at.UnixMilli() < 0 {
+				return time.Time{}, errors.New("timestamp cannot precede the Unix epoch")
+			}
 			return at, nil
 		}
 	}
@@ -515,21 +518,42 @@ type readerFetch struct {
 	partitions []int32
 }
 
-func readerFetches(leaders map[int32][]int32, follow bool) []readerFetch {
-	fetches := make([]readerFetch, 0, len(leaders))
-	for leader, ids := range leaders {
-		if follow {
-			fetches = append(fetches, readerFetch{leader, ids})
+func readerFetches(md kadm.TopicDetail, positions map[int32]readPosition, opts consumeOptions, round uint64) ([]readerFetch, error) {
+	var fetches []readerFetch
+	byLeader := make(map[int32][]int32)
+	for _, id := range opts.partitions {
+		pos := positions[id]
+		if !opts.follow && pos.next >= pos.end {
 			continue
 		}
-		// The first nonempty partition can use the whole response budget.
-		// For a finite scan, fetch each partition separately so an empty
-		// response can distinguish a compacted tail from an exhausted budget.
-		for _, id := range ids {
-			fetches = append(fetches, readerFetch{leader, []int32{id}})
+		p, ok := md.Partitions[id]
+		if !ok {
+			return nil, kerr.UnknownTopicOrPartition
+		}
+		if p.Err != nil {
+			return nil, p.Err
+		}
+		if p.Leader < 0 {
+			return nil, kerr.LeaderNotAvailable
+		}
+		if opts.follow {
+			byLeader[p.Leader] = append(byLeader[p.Leader], id)
+		} else {
+			// A single-partition request distinguishes a compacted tail from
+			// an empty reply caused by another partition using the byte budget.
+			fetches = append(fetches, readerFetch{p.Leader, []int32{id}})
 		}
 	}
-	return fetches
+	for leader, ids := range byLeader {
+		// Only the first nonempty partition is guaranteed its oversized batch.
+		// Give each partition that position once per cycle on its own broker.
+		first := int(round % uint64(len(ids)))
+		if first != 0 {
+			ids = slices.Concat(ids[first:], ids[:first])
+		}
+		fetches = append(fetches, readerFetch{leader, ids})
+	}
+	return fetches, nil
 }
 
 func (b *broker) readerPositions(ctx context.Context, topic string, o consumeOptions) (map[int32]readPosition, error) {
@@ -613,12 +637,10 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 
 	var positions map[int32]readPosition
 	var md kadm.TopicDetail
-	var identity kadm.TopicID
-	haveIdentity := false
-	needMetadata := true
 	retry := time.Second
 	var nextMetadata time.Time
 	var reportedScanned int64
+	var round uint64
 	decompressor := kgo.DefaultDecompressor()
 	key, value := strings.ToLower(o.key), strings.ToLower(o.value)
 	for ctx.Err() == nil {
@@ -642,7 +664,7 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 			}
 			connection.admin = kadm.NewClient(connection.client)
 		}
-		if needMetadata || time.Now().After(nextMetadata) {
+		if time.Now().After(nextMetadata) {
 			topics, e := connection.metadata(req, topic)
 			if e != nil {
 				err = e
@@ -650,15 +672,12 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 				err = kerr.UnknownTopicOrPartition
 			} else if t.Err != nil {
 				err = t.Err
-			} else if haveIdentity && t.ID != identity {
+			} else if md.Topic != "" && t.ID != md.ID {
 				cancel()
 				emit("ERROR", "The topic identity changed; start a new reader.")
 				return
 			} else {
 				md = t
-				identity = t.ID
-				haveIdentity = true
-				needMetadata = false
 				nextMetadata = time.Now().Add(30 * time.Second)
 			}
 		}
@@ -666,40 +685,18 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 			positions, err = connection.readerPositions(req, topic, o)
 		}
 		if err == nil {
-			active := 0
-			leaders := map[int32][]int32{}
-			for _, id := range o.partitions {
-				p := positions[id]
-				if o.follow || p.next < p.end {
-					active++
-					m, ok := md.Partitions[id]
-					if !ok {
-						err = kerr.UnknownTopicOrPartition
-						break
-					}
-					if m.Err != nil {
-						err = m.Err
-						break
-					}
-					if m.Leader < 0 {
-						err = kerr.LeaderNotAvailable
-						break
-					}
-					leaders[m.Leader] = append(leaders[m.Leader], id)
-				}
-			}
-			if active == 0 {
+			var fetches []readerFetch
+			fetches, err = readerFetches(md, positions, o, round)
+			if err == nil && len(fetches) == 0 {
 				cancel()
 				emit("COMPLETE", "Captured end reached")
 				return
 			}
+			round++
 			// Parsing and cursor movement use the broker's batches, including
 			// control batches and compacted offset gaps.
-			for _, nextFetch := range readerFetches(leaders, o.follow) {
+			for _, nextFetch := range fetches {
 				ids := nextFetch.partitions
-				if err != nil {
-					break
-				}
 				request := kmsg.NewPtrFetchRequest()
 				request.MaxWaitMillis = 250
 				request.MinBytes = 1
@@ -709,7 +706,9 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 				t := kmsg.NewFetchRequestTopic()
 				t.Topic = topic
 				t.TopicID = [16]byte(md.ID)
+				pending := make(map[int32]struct{}, len(ids))
 				for _, id := range ids {
+					pending[id] = struct{}{}
 					item := kmsg.NewFetchRequestTopicPartition()
 					item.Partition = id
 					item.FetchOffset = positions[id].next
@@ -727,17 +726,16 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 				if err = kerr.ErrorForCode(fetch.ErrorCode); err != nil {
 					break
 				}
-				seen := map[int32]bool{}
 				for _, ft := range fetch.Topics {
 					if fetch.Version >= 13 && ft.TopicID != t.TopicID || fetch.Version < 13 && ft.Topic != topic {
 						continue
 					}
 					for i := range ft.Partitions {
 						p := &ft.Partitions[i]
-						if !slices.Contains(ids, p.Partition) || seen[p.Partition] {
+						if _, expected := pending[p.Partition]; !expected {
 							continue
 						}
-						seen[p.Partition] = true
+						delete(pending, p.Partition)
 						position := positions[p.Partition]
 						result, next := kgo.ProcessFetchPartition(kgo.ProcessFetchPartitionOpts{Topic: topic, Partition: p.Partition, Offset: position.next}, p, decompressor, nil)
 						if result.Err != nil {
@@ -782,8 +780,11 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 						positions[p.Partition] = position
 					}
 				}
-				if len(seen) != len(ids) && err == nil {
+				if len(pending) != 0 && err == nil {
 					err = io.ErrUnexpectedEOF
+				}
+				if err != nil {
+					break
 				}
 			}
 		}
@@ -807,7 +808,7 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 		}
 		connection.client.Close()
 		connection.client = nil
-		needMetadata = true
+		nextMetadata = time.Time{}
 		emit("RECONNECTING", fmt.Sprintf("retry in %s · %v", retry, err))
 		select {
 		case <-time.After(retry):

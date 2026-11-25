@@ -15,15 +15,65 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func TestReaderFetches(t *testing.T) {
-	leaders := map[int32][]int32{7: {3, 9}}
-	wantFinite := []readerFetch{{7, []int32{3}}, {7, []int32{9}}}
-	if got := readerFetches(leaders, false); !reflect.DeepEqual(got, wantFinite) {
-		t.Fatalf("finite fetching must give each partition its own byte budget: got %v, want %v", got, wantFinite)
+func TestLiveReaderDeliversLargeBatchWhileAnotherPartitionStaysBusy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	b, cluster, _ := migrationBroker(t)
+	producer, err := kgo.NewClient(kgo.SeedBrokers(cluster.ListenAddrs()...),
+		kgo.RecordPartitioner(kgo.ManualPartitioner()), kgo.ProducerBatchMaxBytes(4<<20),
+		kgo.ProducerBatchCompression(kgo.NoCompression()))
+	if err != nil {
+		t.Fatal(err)
 	}
-	wantFollowing := []readerFetch{{7, []int32{3, 9}}}
-	if got := readerFetches(leaders, true); !reflect.DeepEqual(got, wantFollowing) {
-		t.Fatalf("following can fetch multiple partitions per broker: got %v, want %v", got, wantFollowing)
+	defer producer.Close()
+	configs, err := b.admin.AlterTopicConfigs(ctx, []kadm.AlterConfig{
+		{Op: kadm.SetConfig, Name: "max.message.bytes", Value: ptr("4194304")},
+	}, migrationTopic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configs.On(migrationTopic, func(r *kadm.AlterConfigsResponse) error { return r.Err }); err != nil {
+		t.Fatal(err)
+	}
+
+	busy := func() *kgo.Record { return &kgo.Record{Topic: migrationTopic, Partition: 0, Value: []byte("busy")} }
+	large := bytes.Repeat([]byte{'x'}, (2<<20)+1)
+	if err := producer.ProduceSync(ctx, busy(), &kgo.Record{Topic: migrationTopic, Partition: 1, Value: large}).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+	store := newPayloadStore(t.TempDir(), payloadQuota)
+	defer store.close()
+	var delivered bool
+	opts := consumeOptions{partitions: []int32{0, 1}, start: startBeginning, follow: true, limit: 10}
+	b.readRecords(ctx, &readerSession{}, migrationTopic, opts, store, func(update readerUpdate) {
+		for _, record := range update.records {
+			if record.id.Partition == 1 {
+				full, err := record.full()
+				if err != nil || !bytes.Equal(large, full) || record.id.offset != 0 {
+					t.Fatal("large batch was not delivered intact at offset 0", err)
+				}
+				delivered = true
+				cancel()
+				return
+			}
+		}
+		if len(update.records) > 0 && update.state == "READING" {
+			if err := producer.ProduceSync(ctx, busy()).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if !delivered {
+		t.Fatal("partition 0 consumed the available fetch budget every time, starving partition 1")
+	}
+}
+
+func TestReaderTimestampRange(t *testing.T) {
+	if _, err := timestamp("1969-12-31T23:59:59.999Z"); err == nil {
+		t.Fatal("timestamp -1 ms would be interpreted as Kafka's latest-offset sentinel")
+	}
+	if at, err := timestamp("1970-01-01T00:00:00Z"); err != nil || at.UnixMilli() != 0 {
+		t.Fatalf("epoch timestamp: got %v, err=%v", at, err)
 	}
 }
 

@@ -16,9 +16,8 @@ type ratePoint struct {
 	known bool
 }
 type series struct {
-	last    *int64
-	points  []point
-	history []ratePoint
+	last   *int64
+	points []point
 }
 
 func (s *series) add(at time.Time, v *int64) {
@@ -32,11 +31,7 @@ func (s *series) add(at time.Time, v *int64) {
 			s.points = s.points[1:]
 		}
 	}
-	rate, known := s.instant()
-	s.history = append(s.history, ratePoint{rate, known})
-	if len(s.history) > 90 {
-		s.history = s.history[len(s.history)-90:]
-	}
+
 }
 func (s *series) instant() (float64, bool) {
 	n := len(s.points)
@@ -77,6 +72,7 @@ func (s *series) decreased(value *int64) bool {
 
 type measurement struct {
 	end, commit, lag series
+	history          []ratePoint
 	initialLag       *int64
 	owner            string
 	ownerKnown       bool
@@ -87,12 +83,42 @@ type measurement struct {
 	identity         string
 }
 
-func (m *measurement) observe(at time.Time, p partition) {
-	de, dc := m.end.decreased(p.End), m.commit.decreased(p.Commit)
-	if de {
+// A chart displays either a topic's incoming rate or a group's commit rate.
+func (m *measurement) chartSample(s *series, reset bool) {
+	if reset {
+		m.history = nil
+	}
+	rate, known := s.instant()
+	m.history = append(m.history, ratePoint{rate, known})
+	if len(m.history) > 90 {
+		m.history = m.history[len(m.history)-90:]
+	}
+}
+
+func (m *measurement) observeEnd(at time.Time, end *int64) bool {
+	decreased := m.end.decreased(end)
+	if decreased {
 		m.end = series{}
 		m.lastAdvance = time.Time{}
 	}
+	if end != nil && len(m.end.points) > 0 && *end > m.end.points[len(m.end.points)-1].offset {
+		m.lastAdvance = at
+	}
+	m.end.add(at, end)
+	return decreased
+}
+
+func (m *measurement) observeTopic(at time.Time, end *int64) {
+	decreased := m.observeEnd(at, end)
+	if decreased {
+		m.discontinuities++
+	}
+	m.chartSample(&m.end, decreased)
+}
+
+func (m *measurement) observe(at time.Time, p partition) {
+	de := m.observeEnd(at, p.End)
+	dc := m.commit.decreased(p.Commit)
 	if dc {
 		m.commit = series{}
 	}
@@ -101,11 +127,8 @@ func (m *measurement) observe(at time.Time, p partition) {
 		m.initialLag = nil
 		m.discontinuities++
 	}
-	if p.End != nil && len(m.end.points) > 0 && *p.End > m.end.points[len(m.end.points)-1].offset {
-		m.lastAdvance = at
-	}
-	m.end.add(at, p.End)
 	m.commit.add(at, p.Commit)
+	m.chartSample(&m.commit, dc)
 	lag := p.lag()
 	m.lag.add(at, lag)
 	if lag != nil && m.initialLag == nil {

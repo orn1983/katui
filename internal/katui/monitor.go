@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 )
 
@@ -43,14 +44,14 @@ func (u *ui) saveCache() {
 	if u.b.noCache {
 		return
 	}
+	if u.cacheBusy {
+		return
+	}
 	c := cacheFile{GroupNames: append([]string(nil), u.groupNames...), Groups: map[string]groupSample{}, At: time.Now()}
 	for name, g := range u.groups {
 		if g.Error == "" {
 			c.Groups[name] = g
 		}
-	}
-	if u.cacheBusy {
-		return
 	}
 	u.cacheBusy = true
 	backend, cluster := u.b.backend, u.b.cluster
@@ -186,6 +187,10 @@ func (u *ui) poll() {
 						}
 						delete(u.deleted, name)
 					}
+					maps.DeleteFunc(u.metrics, func(k observationKey, _ *measurement) bool {
+						_, exists := topics[k.Topic]
+						return k.group == "" && !exists
+					})
 					for name := range u.topics {
 						if _, ok := topics[name]; !ok {
 							delete(u.topics, name)
@@ -233,11 +238,11 @@ func (u *ui) poll() {
 func (u *ui) pollGroupList(interval time.Duration) {
 	u.sample("groups", interval, func(ctx context.Context, deliver func(func())) (func(), error) {
 		names, nameErr := u.b.groupNames(ctx)
-		if names == nil && nameErr != nil {
+		if len(names) == 0 && nameErr != nil {
 			return nil, nameErr
 		}
 		deliver(func() {
-			u.groupNames = append([]string{}, names...)
+			u.updateGroupList(names, nameErr)
 			u.pendingGroups = true
 			u.relationshipAt = time.Now()
 			u.relationshipError = errorText(nameErr)
@@ -250,6 +255,7 @@ func (u *ui) pollGroupList(interval time.Duration) {
 					u.acceptGroup(g)
 				} else {
 					u.groupErrors[name] = "group check did not finish"
+					u.relationships = nil
 				}
 			}
 			u.saveCache()
@@ -294,10 +300,9 @@ func (u *ui) acceptTopics(rows map[string]topicSample) {
 			if p.End != nil {
 				aggregate += *p.End
 			}
-			// Observe valid values only, but preserve previous displayed bounds on failure.
-			if p.End != nil || p.Error == "" {
-				m.observe(t.At, p)
-			}
+			// Missing observations break the rate series. Keep the last known
+			// bounds below so a stale record count can still be displayed.
+			m.observeTopic(t.At, p.End)
 			if previous, ok := oldParts[p.partKey]; ok && p.Error != "" {
 				if p.Low == nil {
 					t.Partitions[i].Low = previous.Low
@@ -313,8 +318,9 @@ func (u *ui) acceptTopics(rows map[string]topicSample) {
 			*m = measurement{identity: layout}
 		}
 		if complete {
-			m.observe(t.At, partition{End: ptr(aggregate)})
+			m.observeTopic(t.At, &aggregate)
 		} else {
+			m.observeTopic(t.At, nil)
 			t.At = old.At
 			if t.Error == "" {
 				t.Error = "incomplete offset sample"
@@ -324,7 +330,28 @@ func (u *ui) acceptTopics(rows map[string]topicSample) {
 	}
 }
 
+// Only a complete broker listing can establish that a group has disappeared.
+func (u *ui) updateGroupList(names []string, listErr error) {
+	u.relationships = nil
+	if listErr != nil {
+		all := append(slices.Clone(u.groupNames), names...)
+		slices.Sort(all)
+		u.groupNames = slices.Compact(all)
+		return
+	}
+	u.groupNames = names
+	live := make(map[string]bool, len(names))
+	for _, name := range names {
+		live[name] = true
+	}
+	maps.DeleteFunc(u.groups, func(name string, _ groupSample) bool { return !live[name] })
+	maps.DeleteFunc(u.groupErrors, func(name string, _ string) bool { return !live[name] })
+	maps.DeleteFunc(u.cached, func(name string, _ bool) bool { return !live[name] })
+	maps.DeleteFunc(u.metrics, func(k observationKey, _ *measurement) bool { return k.group != "" && !live[k.group] })
+}
+
 func (u *ui) acceptGroup(g groupSample) {
+	u.relationships = nil
 	if g.Error != "" {
 		u.groupErrors[g.Name] = g.Error
 		if _, ok := u.groups[g.Name]; !ok {

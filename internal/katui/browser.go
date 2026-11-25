@@ -24,58 +24,71 @@ func (u *ui) freshness(at time.Time, err string, threshold time.Duration) string
 	return "FRESH"
 }
 
-type relationship struct {
-	groups, stored  int
-	partitions      map[int32]bool
+type topicConsumers struct {
+	groups     int
+	partitions map[int32]bool
+	stored     bool
+}
+
+type consumerRelationships struct {
+	topics          map[string]*topicConsumers
 	pending, failed int
 }
 
-func (u *ui) relationship(topic string) relationship {
-	r := relationship{partitions: map[int32]bool{}}
+// Group snapshots change on a poll. Reuse their topic index across table rows,
+// status updates, and keystrokes until the next group observation.
+func (u *ui) consumersByTopic() *consumerRelationships {
+	if u.relationships != nil {
+		return u.relationships
+	}
+	index := &consumerRelationships{topics: make(map[string]*topicConsumers)}
 	for _, name := range u.groupNames {
 		g, ok := u.groups[name]
-		if !ok || u.cached[name] {
-			r.pending++
+		switch {
+		case u.groupErrors[name] != "":
+			index.failed++
+		case !ok || u.cached[name]:
+			index.pending++
 		}
-		if u.groupErrors[name] != "" {
-			r.failed++
-		}
-		assigned, stored := false, false
+		assigned := make(map[string]bool)
 		for _, p := range g.Partitions {
-			if p.Topic != topic {
-				continue
+			r := index.topics[p.Topic]
+			if r == nil {
+				r = &topicConsumers{}
+				index.topics[p.Topic] = r
 			}
+			r.stored = r.stored || p.Commit != nil
 			if p.Owner != "" {
+				if r.partitions == nil {
+					r.partitions = make(map[int32]bool)
+				}
 				r.partitions[p.Partition] = true
-				assigned = true
+				if !assigned[p.Topic] {
+					r.groups++
+					assigned[p.Topic] = true
+				}
 			}
-			if p.Commit != nil {
-				stored = true
-			}
-		}
-		if assigned {
-			r.groups++
-		}
-		if stored {
-			r.stored++
 		}
 	}
-	return r
+	u.relationships = index
+	return index
 }
+
 func (u *ui) relationshipLabel(topic string) string {
-	r := u.relationship(topic)
+	index := u.consumersByTopic()
 	value := ""
-	switch {
-	case r.groups > 0:
-		value = fmt.Sprintf("%d groups / %d assigned", r.groups, len(r.partitions))
-	case r.stored > 0:
-		value = "OFFSETS ONLY"
+	if r := index.topics[topic]; r != nil {
+		if r.groups > 0 {
+			value = fmt.Sprintf("%d groups / %d assigned", r.groups, len(r.partitions))
+		} else if r.stored {
+			value = "OFFSETS ONLY"
+		}
 	}
 	suffix := ""
 	switch {
-	case u.relationshipError != "" || r.failed > 0:
+	case u.relationshipError != "" || index.failed > 0:
 		suffix = "UNKNOWN"
-	case u.pendingGroups || r.pending > 0 || u.relationshipAt.IsZero():
+	case u.pendingGroups || index.pending > 0 || u.relationshipAt.IsZero():
 		suffix = "CHECKING"
 	case time.Since(u.relationshipAt) > max(45*time.Second, 2*u.b.interval):
 		suffix = "STALE"
@@ -307,7 +320,7 @@ func (u *ui) partitionDetail(loc *location) string {
 			fmt.Fprintf(&body, "Consume %s/s  Avg %s/min  Incoming %s/s\nETA %s\nCaught up [%s%s] %s\nOffset discontinuities %d\n\n",
 				speed(m.commit.instant()), speed(avg*60, known), speed(m.end.instant()), m.eta(lag, false), strings.Repeat("█", fill),
 				strings.Repeat("░", 20-fill), percent(progress, progOK), m.discontinuities)
-			body.WriteString(chart(m.commit.history, u.width-4))
+			body.WriteString(chart(m.history, u.width-4))
 			fmt.Fprintf(&body, "\nOwner changes (%d)\n%s", m.ownerChangeCount, strings.Join(m.ownerChanges, "\n"))
 		} else {
 			avg, _, known := m.end.average()
@@ -325,7 +338,7 @@ func (u *ui) partitionDetail(loc *location) string {
 			}
 			fmt.Fprintf(&body, "\n\nNow %s/s  Avg60 %s/s\nLast observed %s\nOffset discontinuities %d\n\n",
 				speed(m.end.instant()), speed(avg, known), clock(m.lastAdvance), m.discontinuities)
-			body.WriteString(chart(m.end.history, u.width-4))
+			body.WriteString(chart(m.history, u.width-4))
 		}
 		if p.Error != "" {
 			fmt.Fprintf(&body, "\n%s", safe(p.Error, true))
@@ -383,7 +396,7 @@ func (u *ui) updateStatus() {
 			summary += " · " + e
 		}
 	case "picker":
-		relation := u.relationship(loc.topic)
+		relation := u.consumersByTopic()
 		summary = fmt.Sprintf("Checked %d · pending %d · failed %d · matching/unverified %d", max(0, len(u.groupNames)-relation.pending-relation.failed), relation.pending, relation.failed, len(u.rows))
 		if row := u.selected(); row.group != "" {
 			var bucket lagBucket

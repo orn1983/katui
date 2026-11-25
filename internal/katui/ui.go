@@ -75,6 +75,7 @@ type ui struct {
 	groupErrors                    map[string]string
 	cached                         map[string]bool
 	pendingGroups, cacheBusy       bool
+	relationships                  *consumerRelationships
 	relationshipAt                 time.Time
 	relationshipError              string
 	metrics                        map[observationKey]*measurement

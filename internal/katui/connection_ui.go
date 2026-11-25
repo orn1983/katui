@@ -46,7 +46,7 @@ func (u *ui) showClusters() {
 	}
 	picker := &clusterPicker{dialog: d}
 	k := keyHint
-	idleHint := k("↑") + " " + k("↓") + " Select  ·  " + k("c") + " Connect  ·  " + k("q") + " Quit"
+	idleHint := k("↓/j") + " " + k("↑/k") + " Select  ·  " + k("c") + " Connect  ·  " + k("q") + " Quit"
 	if !starting {
 		idleHint += "\nSwitching clusters stops the active reader."
 	}

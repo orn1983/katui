@@ -126,7 +126,7 @@ func (p *payloadPane) newTreeView() *tview.TreeView {
 func (p *payloadPane) updateNavigation() {
 	k := keyHint
 	if p.tree.HasFocus() {
-		p.navigation.SetText("Tree · " + k("←/→") + " Collapse/expand  " + k("Tab") + " Node text")
+		p.navigation.SetText("Tree · " + k("Arrows/hjkl") + " Navigate  " + k("Tab") + " Node text\n" + k("←/h") + " Collapse or parent  " + k("→/l") + " Expand or child")
 		return
 	}
 	mode := payloadScroll
@@ -135,12 +135,12 @@ func (p *payloadPane) updateNavigation() {
 	} else if p.nodeView.HasFocus() {
 		mode = p.nodeView.mode
 	}
-	line := "Scroll · " + k("Arrows") + " Scroll  " + k("Space") + " Cursor"
+	line := "Scroll · " + k("Arrows/hjkl") + " Scroll  " + k("Space") + " Cursor"
 	switch mode {
 	case payloadCursor:
-		line = "Cursor · " + k("Arrows") + " Move  " + k("0/$") + " Line  " + k("v") + " Select"
+		line = "Cursor · " + k("Arrows/hjkl") + " Move  " + k("0/$") + " Line  " + k("v") + " Select"
 	case payloadSelection:
-		line = "Selection · " + k("Arrows") + " Extend  " + k("0/$") + " Line"
+		line = "Selection · " + k("Arrows/hjkl") + " Extend  " + k("0/$") + " Line"
 	}
 	p.navigation.SetText(line + "  " + k("y") + " Yank\n" + k("Alt+←/→") + " Pan 8  " + k("Ctrl+←/→") + " Pan half  " + k("Esc") + " Back")
 }

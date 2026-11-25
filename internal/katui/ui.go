@@ -27,6 +27,7 @@ type tableRow struct {
 	topic, group string
 	partition    int32
 	record       *storedRecord
+	checked      bool
 	rankInteger  int64
 	rank         float64
 	order        int
@@ -903,7 +904,12 @@ func (u *ui) renderTable(header []string, width []int, rows []tableRow) {
 	u.table.Clear()
 	u.table.SetCell(0, 0, browserCell(header, width, loc.horizontal).SetTextColor(u.accent).SetSelectable(false))
 	for i, r := range rows {
-		u.table.SetCell(i+1, 0, browserCell(r.cells, width, loc.horizontal))
+		cell := browserCell(r.cells, width, loc.horizontal)
+		if r.checked {
+			cell.SetBackgroundColor(tcell.ColorDarkSlateGray)
+			cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(u.accent).Bold(true).Underline(true))
+		}
+		u.table.SetCell(i+1, 0, cell)
 	}
 	u.rows = rows
 	if len(rows) > 0 {

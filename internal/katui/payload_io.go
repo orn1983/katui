@@ -75,7 +75,7 @@ func (p *payloadPane) copyValue() {
 	}
 	records := append([]*storedRecord(nil), p.records...)
 	release := p.u.holdPayloads(records)
-	p.notice("Reading complete value for clipboard…")
+	p.notice("Reading raw value for clipboard…")
 	go func() {
 		text, err := completeValueText(p.u.ctx, records)
 		p.u.post(release)
@@ -134,11 +134,11 @@ func (p *payloadPane) copyView() {
 		return
 	}
 	if !p.metadataTab && p.result.incomplete {
-		hint := "Rendered view is incomplete. Use Copy Value or select the displayed text."
+		hint := "Rendered view is incomplete. Use Copy Raw Value or select the displayed text."
 		if !p.full {
-			hint = "Rendered view is incomplete. Press z for Fullscreen, use Copy Value, or select the displayed text."
+			hint = "Rendered view is incomplete. Press z for Fullscreen, use Copy Raw Value, or select the displayed text."
 		} else if p.canLoadFull() {
-			hint = "Rendered view is incomplete. Press Alt+L to load more, use Copy Value, or select the displayed text."
+			hint = "Rendered view is incomplete. Press Alt+L to load more, use Copy Raw Value, or select the displayed text."
 		}
 		p.notice(hint)
 		return

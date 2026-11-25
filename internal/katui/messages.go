@@ -124,7 +124,8 @@ func (u *ui) recordRows() ([]string, []int, []tableRow) {
 			return
 		}
 		check := "[ ]"
-		if u.isChecked(r.id) >= 0 {
+		checked := u.isChecked(r.id) >= 0
+		if checked {
 			check = "[x]"
 		}
 		key, value := string(r.key), string(r.value)
@@ -141,7 +142,7 @@ func (u *ui) recordRows() ([]string, []int, []tableRow) {
 		if pinned {
 			value = "(pinned) " + value
 		}
-		rows = append(rows, tableRow{id: r.id.String(), topic: r.id.Topic, partition: r.id.Partition, record: r, cells: []string{
+		rows = append(rows, tableRow{id: r.id.String(), topic: r.id.Topic, partition: r.id.Partition, record: r, checked: checked, cells: []string{
 			check, payloadAvailability(r), clock(r.timestamp), shortened(key, 100), fmt.Sprint(r.id.Partition), integer(r.id.offset), shortened(value, 300),
 		}})
 	}

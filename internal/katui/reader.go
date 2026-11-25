@@ -228,7 +228,7 @@ func (s *partitionSelector) draw() {
 		state := "○ OFF"
 		color := tcell.ColorSilver
 		if s.checked[id] {
-			state = "✓ ON"
+			state = "✓ ON "
 			color = tcell.ColorLightGreen
 		}
 		s.list.SetCell(i, 0, tview.NewTableCell(state).SetTextColor(color)).SetCell(i, 1, tview.NewTableCell(tview.Escape(safe(id.String(), false))))

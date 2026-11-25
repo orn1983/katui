@@ -197,7 +197,11 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
 	wait("the keyboard reference did not open from Fullscreen commands", func() bool {
 		view, ok := u.app.GetFocus().(*tview.TextView)
-		return ok && u.modalDepth == 2 && strings.HasPrefix(view.GetText(true), "Navigation")
+		if !ok || u.modalDepth != 2 {
+			return false
+		}
+		help := view.GetText(true)
+		return strings.HasPrefix(help, "Navigation") && strings.Contains(help, "Arrows/hjkl") && strings.Contains(help, "Copy Raw Value")
 	})
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
 	wait("closing the keyboard reference did not return to Fullscreen", func() bool { return u.modalDepth == 1 })
@@ -227,7 +231,7 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 		var hasValue, hasView bool
 		for i := range list.GetItemCount() {
 			label, _ := list.GetItemText(i)
-			hasValue = hasValue || label == "Copy Value"
+			hasValue = hasValue || label == "Copy Raw Value"
 			hasView = hasView || label == "Copy View"
 		}
 		return hasValue && hasView

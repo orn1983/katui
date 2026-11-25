@@ -96,6 +96,25 @@ func TestCLIGroupNavigation(t *testing.T) {
 	waitKeyboardState(t, u, "CLI Messages shortcut opened a reader", func() bool {
 		return u.workspace == 1 && strings.Contains(u.message, "Messages require API backend")
 	})
+	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
+	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
+	waitKeyboardState(t, u, "CLI keyboard reference did not open", func() bool {
+		_, ok := u.app.GetFocus().(*tview.TextView)
+		return ok && u.modalDepth == 1
+	})
+	u.post(func() {
+		help := u.app.GetFocus().(*tview.TextView).GetText(true)
+		for _, label := range []string{"2 Consumer Groups", "4 Clusters", "Monitoring", "Kafka CLI properties", "File browser"} {
+			if !strings.Contains(help, label) {
+				t.Errorf("CLI keyboard reference is missing %q", label)
+			}
+		}
+		for _, label := range []string{"1 Topics", "3 Messages", "Create topic", "Start consuming", "Protobuf schema editor"} {
+			if strings.Contains(help, label) {
+				t.Errorf("CLI keyboard reference advertises %q", label)
+			}
+		}
+	})
 }
 
 func waitClusterSelection(t *testing.T, u *ui, done <-chan struct{}, name, address string) {

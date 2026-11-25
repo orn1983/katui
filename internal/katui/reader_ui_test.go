@@ -10,6 +10,26 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+func TestPartitionToggleKeepsLabelAligned(t *testing.T) {
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(screen.Fini)
+	s := newPartitionSelector(&ui{})
+	s.ids = []partKey{{"events", 0}}
+	s.list.SetRect(0, 0, 40, 5)
+	s.draw()
+	s.list.Draw(screen)
+	before, _, _ := s.list.GetCell(0, 1).GetLastPosition()
+	s.toggle(0)
+	s.list.Draw(screen)
+	after, _, _ := s.list.GetCell(0, 1).GetLastPosition()
+	if before <= 0 || before != after || !s.checked[s.ids[0]] {
+		t.Fatalf("partition label moved from column %d to %d on toggle (selected %v)", before, after, s.checked[s.ids[0]])
+	}
+}
+
 func TestConsumeStartsAtExactOffsetFromFilter(t *testing.T) {
 	b, cluster, producer := migrationBroker(t)
 	seedMigrationOffsets(t, t.Context(), b, producer)

@@ -114,3 +114,54 @@ func TestGroupPartitionWithoutTopicListsMatchingTopics(t *testing.T) {
 		t.Fatalf("expected both topics with partition 2, got %s %+v", loc.kind, rows)
 	}
 }
+
+func TestCheckedMessagesHighlightWholeRow(t *testing.T) {
+	u, screen, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	first := retainedRecord(t, nil, []byte("first"))
+	second := retainedRecord(t, nil, []byte("second"))
+	second.id.offset = first.id.offset + 1
+	u.post(func() {
+		screen.SetSize(320, 40) // Leave visible space after the preview column.
+		u.changeWorkspace(2)
+		u.buffer(first)
+		u.buffer(second)
+		u.refreshView()
+	})
+	var x, y int
+	waitColors := func(label string, firstBG, secondBG tcell.Color, underlineFirst bool) {
+		t.Helper()
+		waitKeyboardState(t, u, label, func() bool {
+			left, top, width, _ := u.table.GetInnerRect()
+			if width < 140 {
+				return false
+			}
+			x, y = left+width-2, top+1
+			for col := left; col < left+width; col++ {
+				for row, want := range []tcell.Color{firstBG, secondBG} {
+					_, _, style, _ := screen.GetContent(col, y+row)
+					_, bg, attrs := style.Decompose()
+					if bg != want || (row == 0 && (attrs&tcell.AttrUnderline != 0) != underlineFirst) {
+						return false
+					}
+				}
+			}
+			return true
+		})
+	}
+	key := func(r rune) { clusterKey(t, screen, tcell.KeyRune, r, 0) }
+	plain := tview.Styles.PrimitiveBackgroundColor
+	key(' ')
+	waitColors("checking the current record did not mark its whole row", u.accent, plain, true)
+	key('j')
+	key('i')
+	waitColors("checked row lost its highlight with inspector focus", tcell.ColorDarkSlateGray, u.accent, false)
+	for _, buttons := range []tcell.ButtonMask{tcell.Button1, tcell.ButtonNone} {
+		if err := screen.PostEvent(tcell.NewEventMouse(x, y, buttons, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitColors("clicking past the preview did not select the checked row", u.accent, plain, true)
+	key(' ')
+	key('j')
+	waitColors("unchecked row kept its highlight", plain, u.accent, false)
+}

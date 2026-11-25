@@ -225,7 +225,7 @@ func chart(values []ratePoint, width int) string {
 			case !v.known:
 				out.WriteByte(' ')
 			case line == 0 && v.rate == 0:
-				out.WriteRune('─')
+				out.WriteByte('_')
 			default:
 				steps := int(math.Ceil(max(0, v.rate)/ceiling*height*8)) - line*8
 				out.WriteRune(blocks[max(0, min(8, steps))])

@@ -43,14 +43,17 @@ func TestRatesUseElapsedTimeAndPairedLag(t *testing.T) {
 }
 
 func TestRateChartFramesSamplesAndShowsGaps(t *testing.T) {
-	values := []ratePoint{{rate: 0, known: true}, {}, {rate: 1, known: true}}
-	got := chart(values, 6)
-	want := "Scale 1.0/s  Peak 1.0/s\n┌────┐\n│   █│\n│   █│\n│   █│\n│ ─ █│\n└────┘\n"
+	values := []ratePoint{{rate: 0, known: true}, {}, {rate: 0.01, known: true}, {rate: 1, known: true}}
+	got := chart(values, 7)
+	want := "Scale 1.0/s  Peak 1.0/s\n┌─────┐\n│    █│\n│    █│\n│    █│\n│ _ ▁█│\n└─────┘\n"
 	if got != want {
 		t.Fatalf("rate chart:\n%s\nwant:\n%s", got, want)
 	}
-	if empty := chart(nil, 5); !strings.HasPrefix(empty, "Waiting for rate samples\n┌───┐\n│   │\n") {
-		t.Fatalf("empty rate chart:\n%s", empty)
+	waiting := "Waiting for rate samples\n┌───┐\n│   │\n│   │\n│   │\n│   │\n└───┘\n"
+	for _, history := range [][]ratePoint{nil, {{}, {}}} {
+		if got := chart(history, 5); got != waiting {
+			t.Fatalf("waiting chart for %v:\n%s", history, got)
+		}
 	}
 }
 

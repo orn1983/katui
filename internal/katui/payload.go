@@ -803,7 +803,7 @@ func (u *ui) preparePayload(ctx context.Context, records []*storedRecord, profil
 		result.incomplete, result.canExpand = true, true
 	}
 	if result.canExpand {
-		notices = append(notices, fmt.Sprintf("Input/read budget %s and display budget %s. Copy Value and Export use the retained original.",
+		notices = append(notices, fmt.Sprintf("Input/read budget %s and display budget %s. Copy Raw Value and Export use the retained original.",
 			binarySize(ptr(int64(max(limits.structured, limits.rendered)))), binarySize(ptr(int64(outputLimit)))))
 	}
 	result.text, result.warning = out.String(), strings.Join(notices, "\n")

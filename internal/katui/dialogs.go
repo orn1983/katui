@@ -305,11 +305,18 @@ func (u *ui) quit() {
 }
 func (u *ui) help() {
 	k := keyHint
+	api := u.b.backend == "api"
+	workspaces := k("2") + " Consumer Groups  " + k("4") + " Clusters"
+	setup := k("Alt+A") + " Brokers  " + k("Alt+B") + " Browse for Kafka CLI properties"
+	if api {
+		workspaces = k("1") + " Topics  " + k("2") + " Consumer Groups  " + k("3") + " Messages  " + k("4") + " Clusters"
+		setup = k("Alt+A") + " Brokers  " + k("Alt+S") + " Security"
+	}
 	lines := []string{
 		"Navigation",
-		k("1") + " Topics  " + k("2") + " Consumer Groups  " + k("3") + " Messages  " + k("4") + " Clusters",
+		workspaces,
 		k("Tab") + " / " + k("Shift+Tab") + " Move focus",
-		k("↑") + " " + k("↓") + " / " + k("j") + " " + k("k") + " Navigate  " + k("PageUp") + " / " + k("PageDown") + " Page",
+		k("↓/j") + " Down  " + k("↑/k") + " Up  " + k("PageUp") + " / " + k("PageDown") + " Page",
 		"In tables, " + k("←/→") + " Scroll sideways  " + k("Ctrl+←/→") + " Scroll farther",
 		k("Enter") + " Open selection  " + k("Esc") + " Back or cancel",
 		k("/") + " Search  " + k("q") + " Quit",
@@ -317,56 +324,65 @@ func (u *ui) help() {
 		"While typing, use the indicated Alt shortcuts or Tab to a button and press Enter.",
 		"",
 		"Kafka clusters",
-		k("↑") + " " + k("↓") + " Select  " + k("Enter") + " / " + k("c") + " Connect  " + k("e") + " Edit  " + k("n") + " New",
-		k("1") + " / " + k("2") + " / " + k("3") + " Switch workspaces  " + k("Esc") + " Back",
-		"In connection setup, " + k("Alt+A") + " Brokers  " + k("Alt+S") + " Security (API backend)",
+		k("↓/j") + " " + k("↑/k") + " Select  " + k("Enter") + " / " + k("c") + " Connect  " + k("e") + " Edit  " + k("n") + " New",
+		"In connection setup, " + setup,
 		k("c") + " Connect  " + k("Alt+C") + " Connect while typing  " + k("Esc") + " Back or cancel",
 		"",
-		"Topics and consumer groups",
+		"Monitoring",
 		k("s") + " Sort  " + k("r") + " Refresh or retry monitoring  " + k("z") + " Zoom",
-		k("h") + " Internal topics  " + k("g") + " Topic consumers",
-		"Open a group, then a partition to see its consumption chart. A gap is a missing sample. A flat line is zero.",
-		"Offset discontinuities counts samples where the log end or committed offset moved backward.",
-		"Topics, record reading, and administration require the API backend.",
-		k("n") + " Create topic  " + k("a") + " Manage  " + k("d") + " Delete topic",
-		k("r") + " Review changes  " + k("Alt+A") + " Apply after entering the exact target name",
-		"",
-		"Consume",
-		k("c") + " Open Consume  " + k("Alt+P") + " Focus partitions in the dialog",
-		k("Space") + " Toggle partition  " + k("a") + " All  " + k("n") + " None",
-		k("Alt+S") + " Start position  ·  Choose Exact offset to set a starting offset for each selected partition",
-		"Keep following controls whether the reader waits for new records.",
-		k("Alt+C") + " Start consuming, including while typing",
-		"",
-		"Messages and payloads",
-		k("i") + " Switch records/payload  " + k("b") + " Records  " + k("m") + " Format  " + k("z") + " Toggle Fullscreen",
-		k("p") + " Pause or resume reader  " + k("x") + " Stop reader  ·  Clear buffer in Commands",
-		k("f") + " Follow newest record  ·  Off by default. The Follow checkbox shows the current mode.",
-		k("Space") + " Toggle record in the list  " + k("a") + " Select all visible records  " + k("n") + " Unselect all",
-		k("w") + " Compare selected records  ·  In comparison, " + k("1") + " Payloads  " + k("2") + " Metadata",
-		k("o") + " CSV columns  " + k("u") + " Protobuf  " + k("d") + " Delimiter  " + k("Alt+H") + " Header",
-		k(string(copyValueKey)) + " Copy Value  " + k(string(copyViewKey)) + " Copy View  " + k("s") + " Save value to file",
-		"In Scroll mode, " + k("←/→") + " Pan 8 columns  " + k("↑/↓") + " Scroll 4 lines",
-		k("h") + " " + k("j") + " " + k("k") + " " + k("l") + " Move like Left, Down, Up, and Right in payload text",
-		k("Alt+←/→") + " Pan 8 columns  " + k("Ctrl+←/→") + " Pan half the viewport  " + k("PgUp/PgDn") + " Page",
-		k("Space") + " Toggle Cursor  ·  In Cursor, " + k("Arrows") + " Move  " + k("v") + " Toggle Selection",
-		"In Cursor and Selection, " + k("0") + " Line start  " + k("$") + " Line end",
-		"In Selection, " + k("Arrows") + " Extend or shrink  " + k("Esc") + " Return to Cursor",
-		k("Shift+arrows") + " Extend selection  " + k("Ctrl+A") + " Select all  " + k("Ctrl+C") + " Copy selected text",
-		k("y") + " Yank and exit Selection  ·  In Scroll or Cursor, copy the selected text or the rendered view",
-		"In the tree, " + k("←/→") + " Collapse or expand nodes  " + k("Tab") + " Focus node text",
-		k("/") + " Search payload in Fullscreen  " + k("Enter") + " Return to payload  " + k("n") + " Next  " + k("p") + " Previous",
-		k("Alt+L") + " Load full if available  " + k("Enter") + " Confirm  " + k("Esc") + " Cancel",
-		"",
+		"Open a group, then a partition to see its consumption chart. A blank column is a missing sample. A thin mark at the bottom is a measured zero.",
+		"Offset discontinuities shows how often the log end or committed offset moved backward.",
+		"Offsets are positions. Counts and rates based on offsets are estimates.",
+	}
+	if api {
+		lines = append(lines,
+			"",
+			"Topics and administration",
+			k("h")+" Internal topics  "+k("g")+" Topic consumers",
+			k("n")+" Create topic  "+k("a")+" Manage  "+k("d")+" Delete topic",
+			k("r")+" Review changes. Type the exact target name, then press "+k("Enter")+" to focus Apply and "+k("Enter")+" again to apply. "+k("Alt+A")+" also applies.",
+			"Review requires a Kafka cluster ID. Apply checks the cluster ID again before writing.",
+			"",
+			"Consume",
+			k("c")+" Open Consume  "+k("Alt+P")+" Focus partitions in the dialog",
+			k("Space")+" Toggle partition  "+k("a")+" All  "+k("n")+" None",
+			k("Alt+S")+" Start position  ·  Exact offset uses the same starting offset in every selected partition",
+			"Keep following controls whether the reader waits for new records.",
+			"Reading records does not join a consumer group or commit offsets.",
+			k("Alt+C")+" Start consuming, including while typing",
+			"",
+			"Messages and payloads",
+			k("i")+" Switch records/payload  "+k("b")+" Records  "+k("m")+" Format  "+k("z")+" Toggle Fullscreen",
+			k("p")+" Pause or resume reader  "+k("x")+" Stop reader  ·  Clear buffer in Commands",
+			k("f")+" Toggle Follow (off by default). Entering Cursor or selecting inspector text pins the current record. Press "+k("f")+" to follow again.",
+			k("Space")+" Check or uncheck the row  "+k("a")+" Select all visible records  "+k("n")+" Unselect all",
+			"Checked rows stay highlighted when you move to another message.",
+			k("w")+" Compare selected records  ·  In comparison, "+k("1")+" Payloads  "+k("2")+" Metadata",
+			k("o")+" CSV columns  "+k("u")+" Protobuf  "+k("d")+" Delimiter  "+k("Alt+H")+" Header",
+			k(string(copyValueKey))+" Copy Raw Value  "+k(string(copyViewKey))+" Copy View  "+k("s")+" Save value to file",
+			"In Scroll mode, "+k("←/→")+" Pan 8 columns  "+k("↑/↓")+" Scroll 4 lines",
+			k("Arrows/hjkl")+" Navigate payload text and trees  ·  h left, j down, k up, l right",
+			k("Alt+←/→")+" Pan 8 columns  "+k("Ctrl+←/→")+" Pan half the viewport  "+k("PgUp/PgDn")+" Page",
+			k("Space")+" Toggle Cursor  ·  In Cursor, "+k("Arrows/hjkl")+" Move  "+k("v")+" Toggle Selection",
+			"In Cursor and Selection, "+k("0")+" Line start  "+k("$")+" Line end",
+			"In Selection, "+k("Arrows/hjkl")+" Extend or shrink  "+k("Esc")+" Return to Cursor",
+			k("Shift+arrows")+" Extend selection  "+k("Ctrl+A")+" Select all  "+k("Ctrl+C")+" Copy selected text",
+			k("y")+" Yank and exit Selection  ·  In Scroll or Cursor, copy the selected text or the rendered view",
+			"In the tree, "+k("←/→")+" Collapse or expand nodes  "+k("Tab")+" Focus node text",
+			k("/")+" Search payload in Fullscreen  "+k("Enter")+" Return to payload  "+k("n")+" Next  "+k("p")+" Previous",
+			k("Alt+L")+" Load full if available  "+k("Enter")+" Confirm  "+k("Esc")+" Cancel",
+			"",
+			"Protobuf schema editor",
+			k("b")+" Browse schema  "+k("i")+" Add import folder  "+k("l")+" Load schema  "+k("a")+" Apply",
+		)
+	}
+	lines = append(lines, "",
 		"File browser",
-		k("Alt+P") + " Path  " + k("/") + " Filter  " + k("Alt+B") + " Files",
-		k("Enter") + " Open  " + k("u") + " Up  " + k("h") + " Home  " + k(".") + " Hidden files  " + k("s") + " Choose folder when picking a directory",
-		"",
-		"Protobuf schema editor",
-		k("b") + " Browse schema  " + k("i") + " Add import folder  " + k("l") + " Load schema  " + k("a") + " Apply",
-		"",
-		"Offsets are positions. Retained counts and rates are estimates.",
-		"Read-only inspection does not join an application consumer group.",
+		k("Alt+P")+" Path  "+k("/")+" Filter  "+k("Alt+B")+" Files",
+		k("Enter")+" Open  "+k("u")+" Up  "+k("h")+" Home  "+k(".")+" Hidden files",
+	)
+	if api {
+		lines = append(lines, k("s")+" Choose folder when picking a directory")
 	}
 	text := tview.NewTextView().SetDynamicColors(true).SetWordWrap(true).SetText(strings.Join(lines, "\n"))
 	text.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey { return u.viewerKeys(e, nil, text) })
@@ -407,7 +423,7 @@ func (p *payloadPane) commands() {
 }
 
 func (d *dialog) addCopyCommands(list *tview.List, p *payloadPane) {
-	list.AddItem("Copy Value", "", copyValueKey, func() { d.close(); p.copyValue() })
+	list.AddItem("Copy Raw Value", "", copyValueKey, func() { d.close(); p.copyValue() })
 	list.AddItem("Copy View", "", copyViewKey, func() { d.close(); p.copyView() })
 }
 

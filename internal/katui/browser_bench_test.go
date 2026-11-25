@@ -26,6 +26,7 @@ func BenchmarkMessagesRefresh(b *testing.B) {
 			defer screen.Fini()
 			screen.SetSize(120, 35)
 			u.table.SetRect(0, 0, 60, 30)
+			list := &messageList{u.table, u}
 			value := strings.Repeat("test EVENT abc ", 500)
 			appendRecord := func(offset int64) {
 				u.buffer(&storedRecord{id: recordID{partKey{"topic", 0}, offset}, value: []byte(value), valueSize: len(value), cost: len(value) + 128})
@@ -35,7 +36,7 @@ func BenchmarkMessagesRefresh(b *testing.B) {
 			}
 			render := func() {
 				u.renderTable(u.browserRows(u.current()))
-				u.table.Draw(screen)
+				list.Draw(screen)
 			}
 			render()
 			for i := int64(2000); b.Loop(); i++ {

@@ -67,8 +67,9 @@ type storedRecord struct {
 	headerCount, valueSize, cost int
 	fullPath                     string
 	store                        *payloadStore
-	listFilter                   string
+	listID, listFilter           string
 	listMatch                    bool
+	listLine                     *recordDisplayLine
 }
 
 func (r *storedRecord) fullAvailable() bool {

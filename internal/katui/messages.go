@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -15,6 +16,7 @@ func (u *ui) resetMessages() {
 	old := append(append([]*storedRecord{}, u.records...), u.checked...)
 	old = append(old, u.pinned)
 	u.records = nil
+	clear(u.bufferedByID)
 	u.checked = nil
 	u.pinned = nil
 	u.recordBytes = 0
@@ -30,7 +32,7 @@ func (u *ui) release(record *storedRecord) {
 	if record == nil || record.fullPath == "" || u.pinned == record || u.payloadJobs[record] > 0 {
 		return
 	}
-	if slices.Contains(u.records, record) || slices.Contains(u.checked, record) {
+	if u.bufferedByID[record.id] == record || slices.Contains(u.checked, record) {
 		return
 	}
 	for _, pane := range u.modalPayloads {
@@ -41,22 +43,22 @@ func (u *ui) release(record *storedRecord) {
 	record.discardPayload()
 }
 func (u *ui) buffer(r *storedRecord) {
-	for i, old := range u.records {
-		if old.id == r.id {
-			u.records[i] = r
-			u.recordBytes += r.cost - old.cost
-			u.release(old)
-			u.trimBuffer()
-			return
-		}
+	old := u.bufferedByID[r.id]
+	u.bufferedByID[r.id] = r
+	if old != nil {
+		u.records[slices.Index(u.records, old)] = r
+		u.recordBytes += r.cost - old.cost
+		u.release(old)
+	} else {
+		u.records = append(u.records, r)
+		u.recordBytes += r.cost
 	}
-	u.records = append(u.records, r)
-	u.recordBytes += r.cost
 	u.trimBuffer()
 }
 func (u *ui) trimBuffer() {
 	for len(u.records) > 2000 || u.recordBytes > 16<<20 {
 		old := u.records[0]
+		delete(u.bufferedByID, old.id)
 		u.records[0] = nil
 		u.records = u.records[1:]
 		u.recordBytes -= old.cost
@@ -121,18 +123,24 @@ func (r *storedRecord) matchesListFilter(filter string) bool {
 	return r.listMatch
 }
 
+func listSnippet(data []byte, runes int) string {
+	// One byte beyond the longest possible prefix lets shortened distinguish
+	// an exact fit from a truncated value without copying the entire payload.
+	return shortened(string(data[:min(len(data), utf8.UTFMax*runes+1)]), runes)
+}
+
 func (r *storedRecord) listCells(checked, pinned bool) []string {
 	check := "[ ]"
 	if checked {
 		check = "[x]"
 	}
-	key := shortened(string(r.key), 100)
+	key := listSnippet(r.key, 100)
 	if r.key == nil {
 		key = "<null>"
 	} else if len(r.key) == 0 {
 		key = "<empty>"
 	}
-	value := shortened(string(r.value), 300)
+	value := listSnippet(r.value, 300)
 	if r.value == nil {
 		value = "<tombstone>"
 	} else if len(r.value) == 0 {
@@ -148,20 +156,21 @@ func (u *ui) recordRows() ([]string, []int, []tableRow) {
 	rows := make([]tableRow, 0, len(u.records))
 	filter := strings.ToLower(u.current().filter)
 	var pinnedOnly *storedRecord
-	if !u.followLatest && u.pinned != nil {
+	if !u.followLatest && u.pinned != nil && u.bufferedByID[u.pinned.id] == nil {
 		pinnedOnly = u.pinned
-		for _, r := range u.records {
-			if r.id == pinnedOnly.id {
-				pinnedOnly = nil
-				break
-			}
-		}
+	}
+	checked := make(map[recordID]bool, len(u.checked))
+	for _, r := range u.checked {
+		checked[r.id] = true
 	}
 	addRow := func(r *storedRecord, pinned bool) {
 		if !r.matchesListFilter(filter) {
 			return
 		}
-		rows = append(rows, tableRow{id: r.id.String(), topic: r.id.Topic, partition: r.id.Partition, record: r, checked: u.isChecked(r.id) >= 0, pinned: pinned})
+		if r.listID == "" {
+			r.listID = r.id.String()
+		}
+		rows = append(rows, tableRow{id: r.listID, topic: r.id.Topic, partition: r.id.Partition, record: r, checked: checked[r.id], pinned: pinned})
 	}
 	if pinnedOnly != nil {
 		addRow(pinnedOnly, true)
@@ -189,6 +198,7 @@ func (u *ui) clearBuffer() {
 	old := append([]*storedRecord{}, u.records...)
 	old = append(old, u.pinned)
 	u.records = nil
+	clear(u.bufferedByID)
 	u.recordBytes = 0
 	u.pinned = nil
 	if u.inspector != nil {

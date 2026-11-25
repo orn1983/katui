@@ -47,6 +47,8 @@ func (u *ui) newDialog(title string, body tview.Primitive) *dialog {
 	d.status = tview.NewTextView().SetDynamicColors(true).SetTextColor(tcell.ColorLightGoldenrodYellow)
 	d.footer = tview.NewFlex()
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).AddItem(body, 0, 1, true).AddItem(d.status, 2, 0, false).AddItem(d.footer, 1, 0, false)
+	// A Flex is transparent by default. Cover the underlying workspace inside the dialog frame.
+	d.root.Box = tview.NewBox()
 	d.root.SetBorder(true).SetTitle(" " + tview.Escape(safe(title, false)) + " ").SetBorderColor(u.accent)
 	d.cancel = d.close
 	d.focusables = []tview.Primitive{body}
@@ -59,14 +61,7 @@ func (u *ui) dialog(title string, body tview.Primitive, initial tview.Primitive)
 }
 
 func (u *ui) openDialog(title string, body, initial tview.Primitive, fullscreen bool) *dialog {
-	u.modalDepth++
-	u.modalID++
-	if u.modalDepth == 1 {
-		u.invalidateMonitor()
-	}
 	d := u.newDialog(title, body)
-	d.origin = u.current()
-	d.id, d.restoreFocus = fmt.Sprintf("modal-%d", u.modalID), u.dialogReturnFocus()
 	var page tview.Primitive = d.root
 	if !fullscreen {
 		top := 1
@@ -76,6 +71,17 @@ func (u *ui) openDialog(title string, body, initial tview.Primitive, fullscreen 
 		page = tview.NewGrid().SetRows(top, 0, 1).SetColumns(2, 0, 2).
 			AddItem(d.root, 1, 1, 1, 1, 0, 0, true)
 	}
+	return u.showDialog(d, page, initial)
+}
+
+func (u *ui) showDialog(d *dialog, page, initial tview.Primitive) *dialog {
+	u.modalDepth++
+	u.modalID++
+	if u.modalDepth == 1 {
+		u.invalidateMonitor()
+	}
+	d.origin = u.current()
+	d.id, d.restoreFocus = fmt.Sprintf("modal-%d", u.modalID), u.dialogReturnFocus()
 	d.page = &modalPage{page}
 	u.pages.AddPage(d.id, d.page, true, true)
 	u.app.SetFocus(initial)
@@ -307,13 +313,28 @@ func indexOf(labels []string, which string) int {
 	}
 	return 0
 }
+
+const quitMessage = "Active readers will stop and buffered records will be discarded."
+
+type quitFrame struct{ *tview.Flex }
+
+func (f quitFrame) SetRect(x, y, width, height int) {
+	w := min(width, 50)
+	h := min(height, 5+len(tview.WordWrap(quitMessage, max(1, w-4))))
+	f.Flex.SetRect(x+(width-w)/2, y+(height-h)/2, w, h)
+}
+
 func (u *ui) quit() {
-	text := tview.NewTextView().SetText("Quit Katui? Active readers will stop and buffered records will be discarded.").SetWordWrap(true)
-	d := u.dialog("Quit Katui", text, text)
-	yes := func() { u.app.Stop() }
-	d.button("Yes", "y", yes)
+	text := tview.NewTextView().SetText(quitMessage).SetWordWrap(true).SetTextAlign(tview.AlignCenter)
+	d := u.newDialog("Quit Katui?", text)
+	d.root.RemoveItem(d.status)
+	d.root.SetBorderPadding(1, 0, 1, 1)
+	d.focusables = nil
+	d.footer.AddItem(nil, 0, 1, false)
+	d.button("Yes", "y", u.app.Stop)
 	no := d.button("No", "n", d.close)
-	u.app.SetFocus(no)
+	d.footer.AddItem(nil, 0, 1, false)
+	u.showDialog(d, quitFrame{d.root}, no)
 }
 func (u *ui) help() {
 	k := keyHint

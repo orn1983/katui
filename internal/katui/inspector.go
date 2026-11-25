@@ -17,6 +17,7 @@ const previewScrollDelay = 60 * time.Millisecond
 type payloadRenderJob struct {
 	cancel      context.CancelFunc
 	copyRequest uint64
+	run         func()
 }
 
 type payloadPane struct {
@@ -62,6 +63,15 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	p.navigation = tview.NewTextView().SetDynamicColors(true).SetWrap(false)
 	p.viewer = newPayloadText(p.copyText)
 	p.nodeView = newPayloadText(p.copyText)
+	p.nodeView.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
+		if h < 2 {
+			return x, y, w, h
+		}
+		for col := range w {
+			screen.SetContent(x+col, y, tview.Borders.Horizontal, nil, tcell.StyleDefault.Foreground(tcell.ColorSilver))
+		}
+		return x, y + 1, w, h - 1
+	})
 	p.viewer.modeChanged, p.nodeView.modeChanged = p.updateNavigation, p.updateNavigation
 	if !full && !comparison {
 		p.viewer.onSelect, p.nodeView.onSelect = u.stopFollowing, u.stopFollowing
@@ -304,23 +314,16 @@ func (p *payloadPane) setRecord(record *storedRecord) {
 		p.startRender()
 		return
 	}
-	p.metadata.SetText("")
-	p.status.SetText("Preparing preview…")
-	revision := p.revision
-	p.previewTimer = time.AfterFunc(previewScrollDelay, func() {
-		p.u.post(func() {
-			if p.revision == revision {
-				p.flushPreview()
-			}
-		})
-	})
+	p.renderAfter(previewScrollDelay)
 }
 
 func (p *payloadPane) flushPreview() {
 	if p.previewTimer != nil {
-		p.previewTimer.Stop()
+		// If the timer has fired, its worker already owns this render.
+		if p.previewTimer.Stop() {
+			go p.renderJob.run()
+		}
 		p.previewTimer = nil
-		p.startRender()
 	}
 }
 
@@ -331,8 +334,7 @@ func (p *payloadPane) setPreviewVisible(visible bool) {
 	p.previewHidden = !visible
 	if visible && p.rendering {
 		// A list-only Copy View is already preparing this record.
-		p.metadata.SetText(metadataText(p.records[0]))
-		p.status.SetText("Preparing payload…")
+		p.metadata.SetText("")
 		return
 	}
 	p.refresh()
@@ -405,6 +407,9 @@ func (p *payloadPane) clearRender() {
 	p.treeMatches = nil
 	p.match = -1
 	p.status.SetText("")
+	if !p.full && !p.comparison && len(p.records) > 0 {
+		p.metadata.SetText("")
+	}
 	if p.dialog != nil {
 		p.dialog.say("")
 	}
@@ -424,12 +429,13 @@ func (p *payloadPane) clearRender() {
 }
 
 func (p *payloadPane) startRender() {
+	p.renderAfter(0)
+}
+
+func (p *payloadPane) renderAfter(delay time.Duration) {
 	if len(p.records) == 0 {
 		p.updateLoadButton()
 		return
-	}
-	if !p.previewHidden && !p.full && !p.comparison {
-		p.metadata.SetText(metadataText(p.records[0]))
 	}
 	ctx, cancel := context.WithCancel(p.u.ctx)
 	job := &payloadRenderJob{cancel: cancel}
@@ -437,15 +443,20 @@ func (p *payloadPane) startRender() {
 	revision := p.revision
 	records := append([]*storedRecord{}, p.records...)
 	preferences := map[string]profile{}
-	for _, topic := range p.topics() {
-		preferences[topic] = p.u.profile(topic)
+	for _, record := range records {
+		preferences[record.id.Topic] = p.u.profile(record.id.Topic)
 	}
 	mode := p.modeName
 	limits := p.u.b.inspectionLimits(p.full, p.expanded)
-	release := p.u.holdPayloads(records)
+	inspector := !p.full && !p.comparison
+	var release func()
+	if !inspector {
+		// A scrolling preview reads only the record's immutable in-memory data.
+		release = p.u.holdPayloads(records)
+	}
 	p.rendering = true
 	p.updateLoadButton()
-	if !p.previewHidden {
+	if !inspector || !p.previewHidden && p.root.HasFocus() {
 		status := "Preparing payload…"
 		if p.expanded {
 			status = "Loading full payload…"
@@ -455,7 +466,7 @@ func (p *payloadPane) startRender() {
 		}
 		p.status.SetText(status)
 	}
-	go func() {
+	run := func() {
 		defer cancel()
 		result := p.u.preparePayload(ctx, records, preferences, mode, p.full, len(records) > 1 || p.comparison, limits)
 		doc, capped := indexPayloadText(ctx, result.text)
@@ -464,8 +475,20 @@ func (p *payloadPane) startRender() {
 			result.warning += "\nDisplay limited to 1,000,000 lines. Export for the original."
 		}
 		result.text = doc.text
+		var metadata string
+		if inspector {
+			if ctx.Err() != nil {
+				return
+			}
+			metadata = metadataText(records[0])
+			if ctx.Err() != nil {
+				return
+			}
+		}
 		p.u.post(func() {
-			release()
+			if release != nil {
+				release()
+			}
 			if ctx.Err() != nil {
 				return
 			}
@@ -477,8 +500,12 @@ func (p *payloadPane) startRender() {
 			}
 			p.rendering = false
 			p.renderJob = nil
+			p.previewTimer = nil
 			if p.previewHidden {
 				return
+			}
+			if inspector {
+				p.metadata.SetText(metadata)
 			}
 			p.result = result
 			p.document = doc
@@ -509,7 +536,14 @@ func (p *payloadPane) startRender() {
 				p.scheduleSearch()
 			}
 		})
-	}()
+	}
+	if delay > 0 {
+		// Start decoding off the event loop. Only a completed preview needs a draw.
+		job.run = run
+		p.previewTimer = time.AfterFunc(delay, run)
+	} else {
+		go run()
+	}
 }
 func (n *payloadNode) treeWidget() *tview.TreeNode {
 	if n.widget == nil {

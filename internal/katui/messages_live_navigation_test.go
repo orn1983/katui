@@ -85,3 +85,37 @@ func TestFullLiveMessageBufferNavigation(t *testing.T) {
 		return u.table.HasFocus() && u.pinned == next && len(u.rows) == 2 && !u.selected().checked && u.rows[1].cell != nil
 	})
 }
+
+func TestMessageBufferIndexTracksReplacementsAndEvictions(t *testing.T) {
+	u := newUI(t.Context(), &broker{options: options{noCache: true}})
+	first := &storedRecord{id: recordID{partKey{"a", 1}, 7}, cost: 100}
+	second := &storedRecord{id: recordID{partKey{"a", 0}, 7}, cost: 100}
+	replacement := &storedRecord{id: first.id, cost: 50}
+	u.buffer(first)
+	u.buffer(second)
+	u.buffer(replacement)
+	if len(u.records) != 2 || u.records[0] != replacement || u.bufferedByID[first.id] != replacement || u.recordBytes != 150 {
+		t.Fatal("replacing an offset lost its position or kept the old record")
+	}
+	// Keep the evicted record inspectable, then read its offset again.
+	u.pinned = replacement
+	u.buffer(&storedRecord{id: recordID{partKey{"b", 0}, 7}, cost: (16 << 20) - 100})
+	_, _, rows := u.recordRows()
+	if len(rows) != 3 || !rows[0].pinned || rows[0].record != replacement || u.bufferedByID[first.id] != nil {
+		t.Fatal("an evicted pinned record must appear once outside the buffer")
+	}
+	u.buffer(first)
+	_, _, rows = u.recordRows()
+	if len(rows) != 2 || rows[0].pinned || rows[1].record != first {
+		t.Fatal("reading an evicted offset again left a duplicate pinned row")
+	}
+	u.clearBuffer()
+	u.buffer(replacement)
+	if len(u.records) != 1 || len(u.bufferedByID) != 1 || u.records[0] != replacement {
+		t.Fatal("clearing the buffer retained old offsets")
+	}
+	u.resetMessages()
+	if len(u.bufferedByID) != 0 {
+		t.Fatal("a new reader retained the previous reader's offsets")
+	}
+}

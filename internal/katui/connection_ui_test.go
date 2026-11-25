@@ -41,11 +41,10 @@ func startClusterUIWithScreen(t *testing.T, profiles map[string]connectionProfil
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	u := newUI(ctx, b)
-	u.app.SetScreen(screen)
 	done := make(chan struct{})
 	var runErr error
 	go func() {
-		runErr = u.run()
+		runErr = u.runOnScreen(screen)
 		close(done)
 	}()
 	t.Cleanup(func() {
@@ -62,6 +61,13 @@ func startClusterUIWithScreen(t *testing.T, profiles map[string]connectionProfil
 			t.Error("cluster UI did not stop")
 		}
 	})
+	select {
+	case <-u.screenReady:
+	case <-done:
+		t.Fatalf("cluster UI exited before drawing: %v", runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cluster UI did not start")
+	}
 	return u, done
 }
 
@@ -302,11 +308,9 @@ func TestSavedClusterPromptsOnlyForSessionPassword(t *testing.T) {
 			if !named {
 				clusterKey(t, screen, tcell.KeyRune, 'c', 0)
 			}
-			u.post(func() {
+			waitKeyboardState(t, u, "quick connect did not show just the missing password prompt", func() bool {
 				focus, ok := u.app.GetFocus().(*tview.InputField)
-				if !ok || focus.GetLabel() != "Password " || focus.GetText() != "" || u.modalDepth != 2 {
-					t.Error("quick connect did not show just the missing password prompt")
-				}
+				return ok && focus.GetLabel() == "Password " && focus.GetText() == "" && u.modalDepth == 2
 			})
 			const password = "session"
 			for _, char := range password {

@@ -48,6 +48,7 @@ type ui struct {
 	header, tabs, controls, status *tview.TextView
 	search                         *tview.InputField
 	table                          *tview.Table
+	tableContent                   *browserTableContent
 	detail                         *tview.TextView
 	rows                           []tableRow
 	layout                         string
@@ -105,6 +106,7 @@ type ui struct {
 	readOptions                    consumeOptions
 	readTopic                      string
 	records                        []*storedRecord
+	bufferedByID                   map[recordID]*storedRecord
 	recordBytes                    int
 	evictions                      int
 	checked                        []*storedRecord
@@ -126,6 +128,7 @@ func newUI(ctx context.Context, b *broker) *ui {
 		sizes: map[partKey]int64{}, metrics: map[observationKey]*measurement{}, groupErrors: map[string]string{}, cached: map[string]bool{},
 		deleted: map[string]time.Time{}, errors: map[string]string{}, sessionProfiles: map[string]profile{},
 		readers:       map[string]consumeOptions{},
+		bufferedByID:  map[recordID]*storedRecord{},
 		watchedGroups: map[string]*groupWatch{},
 	}
 	u.stacks = [4][]*location{
@@ -916,9 +919,13 @@ func (u *ui) refreshView() {
 			} else {
 				u.body.SetDirection(tview.FlexColumn)
 			}
-			u.body.AddItem(u.table, 0, 1, true).AddItem(u.inspector.root, 0, 1, false)
+			u.body.AddItem(&messageList{u.table, u}, 0, 1, true).AddItem(u.inspector.root, 0, 1, false)
 		} else {
-			u.body.SetDirection(tview.FlexColumn).AddItem(u.mainPane(), 0, 1, true)
+			pane := u.mainPane()
+			if loc.kind == "messages" {
+				pane = &messageList{u.table, u}
+			}
+			u.body.SetDirection(tview.FlexColumn).AddItem(pane, 0, 1, true)
 		}
 	}
 	title := loc.kind
@@ -967,10 +974,11 @@ func (u *ui) renderTable(header []string, width []int, rows []tableRow) {
 	row = max(0, min(len(rows)-1, row))
 	u.updatingTable = true
 	top, _ := u.table.GetOffset()
-	u.table.SetContent(&browserTableContent{
+	u.tableContent = &browserTableContent{
 		header: browserCell(header, width, loc.horizontal).SetTextColor(u.accent).SetSelectable(false),
 		rows:   rows, widths: width, skip: loc.horizontal, accent: u.accent,
-	})
+	}
+	u.table.SetContent(u.tableContent)
 	u.rows = rows
 	if len(rows) > 0 {
 		loc.selected = rows[row].id
@@ -1014,18 +1022,14 @@ func (c *browserTableContent) GetCell(row, column int) *tview.TableCell {
 	if r.cell != nil {
 		return r.cell
 	}
-	values := r.cells
 	if r.record != nil {
-		values = r.record.listCells(r.checked, r.pinned)
+		r.cell = r.record.displayLine(c, r).cell
+		return r.cell
 	}
-	cell := browserCell(values, c.widths, c.skip)
+	cell := browserCell(r.cells, c.widths, c.skip)
 	if r.alertColor != tcell.ColorDefault {
 		cell.SetTextColor(r.alertColor)
 		cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(r.alertColor).Bold(true))
-	}
-	if r.checked {
-		cell.SetBackgroundColor(tcell.ColorDarkSlateGray)
-		cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(c.accent).Bold(true).Underline(true))
 	}
 	r.cell = cell
 	return cell
@@ -1034,6 +1038,10 @@ func (c *browserTableContent) GetCell(row, column int) *tview.TableCell {
 // Browser rows use a fixed display width for each column. A single table
 // cell per row lets the viewport scroll in terminal cells within a column.
 func browserCell(values []string, widths []int, skip int) *tview.TableCell {
+	return tview.NewTableCell(tview.Escape(browserLine(values, widths, skip))).SetExpansion(1)
+}
+
+func browserLine(values []string, widths []int, skip int) string {
 	var out strings.Builder
 	for i, value := range values {
 		if i > 0 {
@@ -1052,7 +1060,7 @@ func browserCell(values []string, widths []int, skip int) *tview.TableCell {
 		}
 	}
 	_, visible := splitDisplay(out.String(), skip)
-	return tview.NewTableCell(tview.Escape(visible)).SetExpansion(1)
+	return visible
 }
 func splitDisplay(s string, cells int) (string, string) {
 	g := uniseg.NewGraphemes(s)

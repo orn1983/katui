@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"golang.org/x/term"
 )
@@ -77,7 +78,10 @@ func run(ctx context.Context, args []string) error {
 	}
 	for {
 		u := newUI(ctx, b)
-		err := u.run()
+		screen, err := tcell.NewScreen()
+		if err == nil {
+			err = u.runOnScreen(screen)
+		}
 		b.close()
 		if err != nil || u.nextBroker == nil {
 			return err

@@ -1,6 +1,7 @@
 package katui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -36,8 +37,8 @@ func TestScrollingDefersPreviewAndCopiesCurrentRecord(t *testing.T) {
 			if u.pinned != records[row-1] || len(p.records) != 1 || p.records[0] != u.pinned {
 				t.Error("selection did not bind the highlighted record immediately")
 			}
-			if p.previewTimer == nil || p.rendering || len(u.payloadJobs) != 0 || p.viewer.doc.text != "" {
-				t.Error("scrolling started a decoder or left the prior payload on screen")
+			if p.previewTimer == nil || len(u.payloadJobs) != 0 || p.viewer.doc.text != "" || p.metadata.GetText(false) != "" || p.status.GetText(false) != "" {
+				t.Error("scrolling retained the previous record or flashed a loading status")
 			}
 		}
 	})
@@ -106,4 +107,30 @@ func TestScrollingDefersPreviewAndCopiesCurrentRecord(t *testing.T) {
 	waitKeyboardState(t, u, "a matching filter did not restore the selected preview", func() bool {
 		return u.pinned == records[2] && u.inspector.viewer.doc.text == "third"
 	})
+}
+
+func TestSettledPreviewPublishesInOneUpdate(t *testing.T) {
+	u := newUI(t.Context(), &broker{})
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(screen.Fini)
+	u.screen = screen
+	close(u.screenReady)
+	t.Cleanup(func() { close(u.shuttingDown) })
+	first := retainedRecord(t, nil, []byte("first"))
+	second := retainedRecord(t, nil, []byte("second"))
+	second.id.offset = 42
+	p := u.newPayloadPane(false, false, []*storedRecord{first})
+	p.setRecord(second)
+	select {
+	case publish := <-u.updates:
+		publish()
+	case <-time.After(3 * time.Second):
+		t.Fatal("preview failed to publish")
+	}
+	if p.viewer.doc.text != "second" || !strings.Contains(p.metadata.GetText(false), "@42 ") || p.rendering {
+		t.Fatal("the first update after the scroll delay must present both metadata and payload")
+	}
 }

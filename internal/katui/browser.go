@@ -336,7 +336,7 @@ func (u *ui) partitionDetail(loc *location) string {
 }
 
 func (u *ui) updateStatus() {
-	if u.status == nil {
+	if u.status == nil || u.workspace == clustersWorkspace {
 		return
 	}
 	loc := u.current()

@@ -24,8 +24,15 @@ func startClusterUI(t *testing.T, profiles map[string]connectionProfile, args ..
 	if err != nil {
 		t.Fatal(err)
 	}
+	b := &broker{options: opts}
+	if len(opts.brokers) != 0 {
+		if err := b.open(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(b.close)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
-	u := newUI(ctx, &broker{options: opts})
+	u := newUI(ctx, b)
 	screen := tcell.NewSimulationScreen("UTF-8")
 	u.app.SetScreen(screen)
 	done := make(chan struct{})
@@ -71,6 +78,79 @@ func waitClusterSelection(t *testing.T, u *ui, done <-chan struct{}, name, addre
 	case <-time.After(5 * time.Second):
 		t.Fatal("shortcut did not connect")
 	}
+}
+
+func TestClustersWorkspaceKeepsNavigationVisible(t *testing.T) {
+	cluster := kfake.MustCluster(kfake.NumBrokers(1))
+	t.Cleanup(cluster.Close)
+	address := cluster.ListenAddrs()[0]
+	u, screen, _ := startClusterUI(t, map[string]connectionProfile{
+		"Saved cluster": {Brokers: []string{address}},
+	}, "-b", address)
+
+	check := func(verify func()) {
+		t.Helper()
+		if !u.post(verify) {
+			t.Fatal("UI stopped during navigation")
+		}
+	}
+	waitFor := func(workspace, modalDepth int) {
+		t.Helper()
+		var gotWorkspace, gotDepth int
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			check(func() { gotWorkspace, gotDepth = u.workspace, u.modalDepth })
+			if gotWorkspace == workspace && gotDepth == modalDepth {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("got workspace %d with %d dialogs, want workspace %d with %d dialogs", gotWorkspace, gotDepth, workspace, modalDepth)
+	}
+	checkBar := func() {
+		t.Helper()
+		cells, width, _ := screen.GetContents()
+		var row strings.Builder
+		for _, cell := range cells[width : 2*width] {
+			if len(cell.Runes) != 0 {
+				row.WriteRune(cell.Runes[0])
+			}
+		}
+		for _, label := range []string{"1 ", "Topics", "2 ", "Consumer Groups", "3 ", "Messages", "4 ", "Clusters"} {
+			if !strings.Contains(row.String(), label) {
+				t.Errorf("workspace bar is covered: %q", row.String())
+				break
+			}
+		}
+	}
+	waitFor(0, 0)
+	for i, key := range "123" {
+		clusterKey(t, screen, tcell.KeyRune, '4', 0)
+		waitFor(clustersWorkspace, 0)
+		check(func() {
+			_, tabsY, _, tabsHeight := u.tabs.GetRect()
+			_, pickerY, _, _ := u.clusters.root.GetRect()
+			if pickerY < tabsY+tabsHeight {
+				t.Error("cluster list overlaps the workspace bar")
+			}
+			checkBar()
+		})
+		clusterKey(t, screen, tcell.KeyRune, key, 0)
+		waitFor(i, 0)
+		check(func() {
+			if u.clusters != nil {
+				t.Errorf("%c left the cluster list open", key)
+			}
+		})
+	}
+	clusterKey(t, screen, tcell.KeyRune, '4', 0)
+	clusterKey(t, screen, tcell.KeyRune, 'e', 0)
+	waitFor(clustersWorkspace, 1)
+	check(checkBar)
+	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
+	waitFor(clustersWorkspace, 0)
+	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
+	waitFor(2, 0)
 }
 
 func TestSavedClusterQuickConnect(t *testing.T) {

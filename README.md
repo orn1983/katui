@@ -15,7 +15,7 @@ The executable entry point is `main.go`. Kafka operations, the terminal UI, and 
 
 ## Connect
 
-Run `./katui` to choose a saved cluster. Use ↑ and ↓ to select a profile, then press Enter or `c` to connect directly. Press `e` to edit the selected profile or `n` to open **Connect to Kafka** for a new one. If a saved profile needs a session password, Katui prompts for the password and Enter connects. Press `4` or choose **Kafka clusters** from Ctrl+P to reopen the same list in Katui. Switching clusters stops the current reader and opens a fresh view.
+Run `./katui` to choose a saved cluster. Use ↑ and ↓ to select a profile, then press Enter or `c` to connect directly. Press `e` to edit the selected profile or `n` to open **Connect to Kafka** for a new one. If a saved profile needs a session password, Katui prompts for the password and Enter connects. Press `4` or choose **Kafka clusters** from Ctrl+P to open the Clusters workspace. From there, press `1`, `2`, or `3` to switch directly, or Esc to return to the previous workspace. Connecting to another cluster stops the current reader and opens a fresh view.
 
 With no saved profiles, **Connect to Kafka** opens automatically. Press Alt+A to focus broker addresses, Alt+S for security, and Alt+G to connect. The highlighted keys jump to fields, toggle saving, or browse for credential and configuration files. Choose plaintext, TLS, SASL with TLS, SASL plaintext with SCRAM, or an existing client-config JSON file.
 

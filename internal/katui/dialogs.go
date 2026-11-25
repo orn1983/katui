@@ -22,23 +22,33 @@ type dialog struct {
 	closed     bool
 }
 
-func (u *ui) dialog(title string, body tview.Primitive, initial tview.Primitive) *dialog {
-	u.modalDepth++
-	u.modalID++
-	if u.modalDepth == 1 {
-		u.invalidateMonitor()
-	}
-	d := &dialog{u: u, id: fmt.Sprintf("modal-%d", u.modalID), body: body, previous: u.app.GetFocus()}
+func (u *ui) newDialog(title string, body tview.Primitive) *dialog {
+	d := &dialog{u: u, body: body}
 	d.status = tview.NewTextView().SetDynamicColors(true).SetTextColor(tcell.ColorLightGoldenrodYellow)
 	d.footer = tview.NewFlex()
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).AddItem(body, 0, 1, true).AddItem(d.status, 2, 0, false).AddItem(d.footer, 1, 0, false)
 	d.root.SetBorder(true).SetTitle(" " + tview.Escape(safe(title, false)) + " ").SetBorderColor(u.accent)
 	d.cancel = d.close
 	d.focusables = []tview.Primitive{body}
-	outer := tview.NewGrid().SetRows(1, 0, 1).SetColumns(2, 0, 2).
+	d.keymap(nil)
+	return d
+}
+
+func (u *ui) dialog(title string, body tview.Primitive, initial tview.Primitive) *dialog {
+	u.modalDepth++
+	u.modalID++
+	if u.modalDepth == 1 {
+		u.invalidateMonitor()
+	}
+	d := u.newDialog(title, body)
+	d.id, d.previous = fmt.Sprintf("modal-%d", u.modalID), u.app.GetFocus()
+	top := 1
+	if u.workspace == clustersWorkspace {
+		top = 2 // Keep the workspace bar above cluster editors and password prompts.
+	}
+	outer := tview.NewGrid().SetRows(top, 0, 1).SetColumns(2, 0, 2).
 		AddItem(d.root, 1, 1, 1, 1, 0, 0, true)
 	u.pages.AddPage(d.id, outer, true, true)
-	d.keymap(nil)
 	u.app.SetFocus(initial)
 	return d
 }
@@ -218,6 +228,7 @@ func (u *ui) help() {
 		"",
 		"Kafka clusters",
 		k("↑") + " " + k("↓") + " Select  " + k("Enter") + " / " + k("c") + " Connect  " + k("e") + " Edit  " + k("n") + " New",
+		k("1") + " / " + k("2") + " / " + k("3") + " Switch workspaces  " + k("Esc") + " Back",
 		k("Alt+G") + " Connect from the editor  " + k("Esc") + " Back or cancel",
 		"",
 		"Topics and consumer groups",
@@ -253,7 +264,7 @@ func (u *ui) palette() {
 	add("Consumer Groups", '2', func() { u.changeWorkspace(1) })
 	add("Messages", '3', func() { u.changeWorkspace(2) })
 	add("Refresh monitoring", 'r', u.requestRefresh)
-	add("Kafka clusters", '4', u.clustersDialog)
+	add("Kafka clusters", '4', u.showClusters)
 	add("Change color theme", 't', u.theme)
 	add("Help", '?', u.help)
 	add("Quit", 'q', u.quit)

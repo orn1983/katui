@@ -140,6 +140,9 @@ func (u *ui) monitorRequest() string {
 }
 
 func (u *ui) connectionPending() bool {
+	if u.workspace == clustersWorkspace {
+		return false
+	}
 	if u.workspace == 2 {
 		return u.readerState.state == "CONNECTING" || u.readerState.state == "RECONNECTING"
 	}
@@ -160,7 +163,7 @@ func (u *ui) cancelConnection() {
 }
 
 func (u *ui) poll() {
-	if u.monitorPaused || len(u.b.brokers) == 0 || u.modalDepth > 0 || u.workspace == 2 {
+	if u.monitorPaused || len(u.b.brokers) == 0 || u.modalDepth > 0 || u.workspace >= 2 {
 		return
 	}
 	loc := u.current()

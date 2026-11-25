@@ -33,6 +33,8 @@ type tableRow struct {
 	order        int
 }
 
+const clustersWorkspace = 3
+
 type ui struct {
 	ctx                            context.Context
 	b                              *broker
@@ -49,8 +51,10 @@ type ui struct {
 	layout                         string
 	workspace                      int
 	workspaceBeforeMessages        int
+	workspaceBeforeClusters        int
+	clusters                       *clusterPicker
 	showInternal, updatingTable    bool
-	stacks                         [3][]*location
+	stacks                         [4][]*location
 	pickerHistory                  map[string]*location
 	modalID, modalDepth            int
 	fullscreen                     string
@@ -112,7 +116,12 @@ func newUI(ctx context.Context, b *broker) *ui {
 		deleted: map[string]time.Time{}, errors: map[string]string{}, sessionProfiles: map[string]profile{},
 		readers: map[string]consumeOptions{}, followLatest: true,
 	}
-	u.stacks = [3][]*location{{{kind: "topics", partition: -1}}, {{kind: "groups", partition: -1}}, {{kind: "messages", partition: -1}}}
+	u.stacks = [4][]*location{
+		{{kind: "topics", partition: -1}},
+		{{kind: "groups", partition: -1}},
+		{{kind: "messages", partition: -1}},
+		{{kind: "clusters", partition: -1}},
+	}
 	if b.view == "groups" {
 		u.workspace = 1
 	}
@@ -182,7 +191,7 @@ func (u *ui) run() error {
 	u.pages.AddPage("main", u.shell, true, true)
 	u.app.SetRoot(u.pages, true).EnableMouse(true).EnablePaste(true).SetInputCapture(u.keys)
 	u.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
-		u.monitoring.Store(len(u.b.brokers) != 0 && !u.monitorPaused && u.workspace != 2 && u.modalDepth == 0)
+		u.monitoring.Store(len(u.b.brokers) != 0 && !u.monitorPaused && u.workspace < 2 && u.modalDepth == 0)
 		if u.screen == nil {
 			u.screen = screen
 			close(u.screenReady)
@@ -199,7 +208,7 @@ func (u *ui) run() error {
 	})
 	u.showLocation()
 	if len(u.b.brokers) == 0 {
-		u.clustersDialog()
+		u.showClusters()
 	}
 	err := u.app.Run()
 	if u.interrupted {
@@ -287,6 +296,8 @@ func (u *ui) current() *location {
 }
 func (u *ui) mainPane() tview.Primitive {
 	switch u.current().kind {
+	case "clusters":
+		return u.clusters.root
 	case "topic-detail", "group-detail":
 		return u.detail
 	}
@@ -314,7 +325,7 @@ func (u *ui) focus(p tview.Primitive) {
 	u.app.SetFocus(p)
 }
 func (u *ui) savePosition() {
-	if u.table == nil {
+	if u.table == nil || u.workspace == clustersWorkspace {
 		return
 	}
 	if u.current().kind != "topic-detail" && u.current().kind != "group-detail" {
@@ -323,15 +334,28 @@ func (u *ui) savePosition() {
 }
 func (u *ui) changeWorkspace(w int) {
 	if w == 0 && u.b.backend == "cli" {
-		u.say("Topics require API backend")
+		if u.workspace == clustersWorkspace {
+			u.clusters.say("Topics require API backend")
+		} else {
+			u.say("Topics require API backend")
+		}
 		return
 	}
 	if w == u.workspace {
 		return
 	}
 	u.savePosition()
-	if w == 2 {
-		u.workspaceBeforeMessages = u.workspace
+	previous := u.workspace
+	if previous == clustersWorkspace {
+		if cancel := u.clusters.cancelAttempt; cancel != nil {
+			cancel()
+		}
+		u.clusters.closed = true
+		u.clusters = nil
+		previous = u.workspaceBeforeClusters
+	}
+	if w == 2 && previous != 2 {
+		u.workspaceBeforeMessages = previous
 	}
 	u.workspace = w
 	u.showLocation()
@@ -339,6 +363,11 @@ func (u *ui) changeWorkspace(w int) {
 func (u *ui) showLocation() {
 	u.fullscreen = ""
 	u.invalidateMonitor()
+	if u.workspace == clustersWorkspace {
+		u.refreshView()
+		u.focus(u.mainPane())
+		return
+	}
 	loc := u.current()
 	filter := loc.filter
 	u.search.SetText(filter)
@@ -467,6 +496,19 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.palette()
 		return nil
 	}
+	if u.workspace == clustersWorkspace {
+		if ev.Key() == tcell.KeyRune && ev.Modifiers() == 0 {
+			switch ev.Rune() {
+			case '1', '2', '3':
+				u.changeWorkspace(int(ev.Rune() - '1'))
+				return nil
+			case '?':
+				u.help()
+				return nil
+			}
+		}
+		return ev
+	}
 	if u.search.HasFocus() {
 		if ev.Key() == tcell.KeyTab || ev.Key() == tcell.KeyBacktab {
 			u.focus(u.mainPane())
@@ -507,7 +549,7 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.refreshView()
 		u.focus(u.search)
 	case '4':
-		u.clustersDialog()
+		u.showClusters()
 	case 'q':
 		u.quit()
 	case '?':
@@ -697,14 +739,21 @@ func (u *ui) refreshView() {
 	}
 	u.header.SetText(header)
 	k := keyHint
-	labels := []string{"Topics", "Consumer Groups", "Messages"}
+	labels := []string{"Topics", "Consumer Groups", "Messages", "Clusters"}
 	for i, label := range labels {
 		if i == u.workspace {
 			label = "[black:" + u.accent.String() + ":b] " + label + " [-:-:-]"
 		}
 		labels[i] = k(strconv.Itoa(i+1)) + " " + label
 	}
-	u.tabs.SetText(strings.Join(labels, "  ") + "   " + k("4") + " Clusters")
+	u.tabs.SetText(strings.Join(labels, "  "))
+	if u.workspace == clustersWorkspace {
+		if u.layout != "clusters" {
+			u.layout = "clusters"
+			u.shell.Clear().AddItem(u.header, 1, 0, false).AddItem(u.tabs, 1, 0, false).AddItem(u.clusters.root, 0, 1, true)
+		}
+		return
+	}
 	open, back, manage := k("Enter")+" Open", k("Esc")+" Back", k("a")+" Manage"
 	partitions, consume, consumers := k("Enter")+" Partition", k("c")+" Consume", k("g")+" Consumers"
 	sortRefresh := k("s") + " Sort  " + k("r") + " Refresh"

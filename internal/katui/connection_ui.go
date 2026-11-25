@@ -19,9 +19,17 @@ const (
 	connectionFile
 )
 
-func (u *ui) clustersDialog() {
-	profiles, err := loadConnectionProfiles(u.b.backend)
+type clusterPicker struct {
+	*dialog
+	cancelAttempt context.CancelFunc
+}
+
+func (u *ui) showClusters() {
+	if u.workspace == clustersWorkspace {
+		return
+	}
 	starting := len(u.b.brokers) == 0
+	profiles, err := loadConnectionProfiles(u.b.backend)
 	if starting && len(profiles) == 0 {
 		u.connectionDialog("", connectionProfile{}, errorText(err))
 		return
@@ -30,7 +38,13 @@ func (u *ui) clustersDialog() {
 	names := sortedKeys(profiles)
 	list := tview.NewList().SetHighlightFullLine(true).
 		SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(u.accent).Bold(true))
-	d := u.dialog("Kafka clusters", list, list)
+	var d *dialog
+	if starting {
+		d = u.dialog("Kafka clusters", list, list)
+	} else {
+		d = u.newDialog("Kafka clusters", list)
+	}
+	picker := &clusterPicker{dialog: d}
 	k := keyHint
 	idleHint := k("↑") + " " + k("↓") + " Select  ·  " + k("c") + " Connect  ·  " + k("q") + " Quit"
 	if !starting {
@@ -38,7 +52,6 @@ func (u *ui) clustersDialog() {
 	}
 
 	newConnection := func() { u.connectionDialog("", connectionProfile{}, "") }
-	var cancelAttempt context.CancelFunc
 	var connectButton, editButton, newButton *tview.Button
 	setChecking := func(checking bool) {
 		connectButton.SetDisabled(checking || len(names) == 0)
@@ -52,13 +65,13 @@ func (u *ui) clustersDialog() {
 		return "", connectionProfile{}
 	}
 	edit := func() {
-		if name, profile := selected(); name != "" && cancelAttempt == nil {
+		if name, profile := selected(); name != "" && picker.cancelAttempt == nil {
 			u.connectionDialog(name, profile, "")
 		}
 	}
 	connect := func() {
 		name, profile := selected()
-		if name == "" || cancelAttempt != nil {
+		if name == "" || picker.cancelAttempt != nil {
 			return
 		}
 		opts := u.b.options
@@ -75,12 +88,12 @@ func (u *ui) clustersDialog() {
 			return
 		}
 		ctx, cancel := context.WithCancel(u.ctx)
-		cancelAttempt = cancel
+		picker.cancelAttempt = cancel
 		setChecking(true)
 		d.hint("Checking " + tview.Escape(safe(name, false)) + "…  " + k("Esc") + " Cancel")
 		u.openConnection(d, ctx, opts, func(candidate *broker, err error) {
 			cancel()
-			cancelAttempt = nil
+			picker.cancelAttempt = nil
 			setChecking(false)
 			if err != nil {
 				d.hint(tview.Escape(safe(err.Error(), false)) + "\n" + idleHint)
@@ -107,9 +120,9 @@ func (u *ui) clustersDialog() {
 		}
 	}
 	d.cancel = func() {
-		if cancelAttempt != nil {
-			cancelAttempt()
-			cancelAttempt = nil
+		if picker.cancelAttempt != nil {
+			picker.cancelAttempt()
+			picker.cancelAttempt = nil
 			setChecking(false)
 			d.hint(idleHint)
 			u.app.SetFocus(list)
@@ -118,7 +131,7 @@ func (u *ui) clustersDialog() {
 		if starting {
 			u.app.Stop()
 		} else {
-			d.close()
+			u.changeWorkspace(u.workspaceBeforeClusters)
 		}
 	}
 	connectButton = d.button("Connect", "Enter", connect)
@@ -135,7 +148,6 @@ func (u *ui) clustersDialog() {
 		d.say(err.Error())
 	case len(names) == 0:
 		d.hint("No saved clusters. " + k("n") + " New connection")
-		u.app.SetFocus(newButton)
 	default:
 		d.hint(idleHint)
 	}
@@ -153,7 +165,7 @@ func (u *ui) clustersDialog() {
 			}
 			return true
 		}
-		if cancelAttempt != nil {
+		if picker.cancelAttempt != nil {
 			return true
 		}
 		if e.Key() == tcell.KeyEnter && list.HasFocus() {
@@ -179,6 +191,16 @@ func (u *ui) clustersDialog() {
 		}
 		return true
 	})
+	if !starting {
+		u.savePosition()
+		u.workspaceBeforeClusters = u.workspace
+		u.workspace = clustersWorkspace
+		u.clusters = picker
+		u.showLocation()
+		if len(names) == 0 {
+			u.app.SetFocus(newButton)
+		}
+	}
 	if _, exists := profiles[u.b.profileName]; starting && u.b.profileName != "" && exists {
 		// An explicitly requested profile reaches the picker only when it
 		// needs interactive credentials.

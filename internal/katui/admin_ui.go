@@ -250,12 +250,6 @@ func (u *ui) topicForm(topic, initial string) {
 		case 'g':
 			review()
 		default:
-			if form.HasFocus() && (e.Key() == tcell.KeyTab || e.Key() == tcell.KeyBacktab) {
-				i, _ := form.GetFocusedItemIndex()
-				if e.Key() == tcell.KeyTab && i < form.GetFormItemCount()-1 || e.Key() == tcell.KeyBacktab && i > 0 {
-					return passFormKey(form, e, u)
-				}
-			}
 			return false
 		}
 		return true
@@ -373,19 +367,6 @@ func (u *ui) groupForm(group, scope, topic string, partition int32) {
 		case 'g':
 			review()
 		default:
-			if form.HasFocus() && (e.Key() == tcell.KeyTab || e.Key() == tcell.KeyBacktab) {
-				i, _ := form.GetFocusedItemIndex()
-				last := 0
-				if reset {
-					last = 2
-					if index, _ := mode.GetCurrentOption(); index >= 2 {
-						last = 1
-					}
-				}
-				if e.Key() == tcell.KeyTab && i < last || e.Key() == tcell.KeyBacktab && i > 0 {
-					return passFormKey(form, e, u)
-				}
-			}
 			return false
 		}
 		return true

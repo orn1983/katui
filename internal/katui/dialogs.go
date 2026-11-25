@@ -12,7 +12,6 @@ type dialog struct {
 	u          *ui
 	id         string
 	root       *tview.Flex
-	body       tview.Primitive
 	status     *tview.TextView
 	footer     *tview.Flex
 	previous   tview.Primitive
@@ -29,7 +28,7 @@ type dialogAction struct {
 }
 
 func (u *ui) newDialog(title string, body tview.Primitive) *dialog {
-	d := &dialog{u: u, body: body}
+	d := &dialog{u: u}
 	d.status = tview.NewTextView().SetDynamicColors(true).SetTextColor(tcell.ColorLightGoldenrodYellow)
 	d.footer = tview.NewFlex()
 	d.root = tview.NewFlex().SetDirection(tview.FlexRow).AddItem(body, 0, 1, true).AddItem(d.status, 2, 0, false).AddItem(d.footer, 1, 0, false)
@@ -154,41 +153,58 @@ func (d *dialog) keymap(handle func(*tcell.EventKey) bool) {
 			return nil
 		}
 		if event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab {
-			focus := d.u.app.GetFocus()
-			if form, ok := d.body.(*tview.Form); ok && form.HasFocus() {
-				item, _ := form.GetFocusedItemIndex()
-				if event.Key() == tcell.KeyTab && item < form.GetFormItemCount()-1 {
-					return event
-				}
-				if event.Key() == tcell.KeyBacktab && item > 0 {
-					return event
-				}
-			}
-			sequence := append([]tview.Primitive{}, d.focusables...)
-			for _, b := range d.buttons {
-				if !b.IsDisabled() {
-					sequence = append(sequence, b)
-				}
-			}
-			if len(sequence) == 0 {
-				return nil
-			}
-			i := 0
-			for index, p := range sequence {
-				if p == focus || p.HasFocus() {
-					i = index
-					break
-				}
-			}
-			step := 1
-			if event.Key() == tcell.KeyBacktab {
-				step = -1
-			}
-			d.u.app.SetFocus(sequence[(i+step+len(sequence))%len(sequence)])
+			d.tab(event)
 			return nil
 		}
 		return event
 	})
+}
+
+// Let tview traverse enabled form fields, then continue into the rest of the
+// dialog when the form wraps. This also works for forms nested beside a table.
+func (d *dialog) tab(event *tcell.EventKey) {
+	reverse := event.Key() == tcell.KeyBacktab
+	items := append([]tview.Primitive(nil), d.focusables...)
+	for _, button := range d.buttons {
+		if !button.IsDisabled() {
+			items = append(items, button)
+		}
+	}
+	if len(items) == 0 {
+		return
+	}
+	setFocus := func(p tview.Primitive) { d.u.app.SetFocus(p) }
+	index := 0
+	for i, p := range items {
+		if !p.HasFocus() {
+			continue
+		}
+		index = i
+		if form, ok := p.(*tview.Form); ok {
+			before, _ := form.GetFocusedItemIndex()
+			form.InputHandler()(event, setFocus)
+			after, _ := form.GetFocusedItemIndex()
+			if reverse && after < before || !reverse && after > before {
+				return
+			}
+		}
+		break
+	}
+	step := 1
+	if reverse {
+		step = -1
+	}
+	target := items[(index+step+len(items))%len(items)]
+	if form, ok := target.(*tview.Form); ok {
+		// All dialogs start their form with an enabled field. Backtab enters
+		// at the last enabled field (which may precede disabled trailing ones).
+		focusForm(d.u, form, 0)
+		if reverse {
+			form.InputHandler()(event, setFocus)
+		}
+		return
+	}
+	setFocus(target)
 }
 func alt(event *tcell.EventKey) rune {
 	if event.Key() == tcell.KeyRune && event.Modifiers()&^tcell.ModShift == tcell.ModAlt {

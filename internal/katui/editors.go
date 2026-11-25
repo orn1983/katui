@@ -96,12 +96,6 @@ func (p *payloadPane) csvEditor(topic string) {
 		case 's':
 			save.SetChecked(!save.IsChecked())
 		default:
-			if form.HasFocus() && (e.Key() == tcell.KeyTab || e.Key() == tcell.KeyBacktab) {
-				i, _ := form.GetFocusedItemIndex()
-				if e.Key() == tcell.KeyTab && i == 0 || e.Key() == tcell.KeyBacktab && i == 1 {
-					return passFormKey(form, e, u)
-				}
-			}
 			return false
 		}
 		return true

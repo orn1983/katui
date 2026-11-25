@@ -372,12 +372,6 @@ func (u *ui) consume(topic string, id int32) {
 				focusForm(u, form, form.GetFormItemIndex(item.GetLabel()))
 				return true
 			}
-			if (e.Key() == tcell.KeyTab || e.Key() == tcell.KeyBacktab) && form.HasFocus() {
-				item, _ := form.GetFocusedItemIndex()
-				if e.Key() == tcell.KeyTab && item < form.GetFormItemCount()-1 || e.Key() == tcell.KeyBacktab && item > 0 {
-					return passFormKey(form, e, u)
-				}
-			}
 			return false
 		}
 		return true
@@ -419,16 +413,6 @@ func (u *ui) consume(topic string, id int32) {
 			}
 		})
 	}()
-}
-func passFormKey(form *tview.Form, e *tcell.EventKey, u *ui) bool {
-	item, _ := form.GetFocusedItemIndex()
-	if e.Key() == tcell.KeyTab {
-		item++
-	} else {
-		item--
-	}
-	focusForm(u, form, item)
-	return true
 }
 func (u *ui) beginReader(topic string, opts consumeOptions) error {
 	if u.store == nil {

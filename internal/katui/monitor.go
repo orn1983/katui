@@ -7,7 +7,45 @@ import (
 	"maps"
 	"slices"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
+
+const topicMetadataInterval = 30 * time.Second
+
+type isrSummary struct {
+	inSync, assigned, degraded int
+	complete, critical, stale  bool
+}
+
+func (u *ui) topicISR(md kadm.TopicDetail) isrSummary {
+	s := isrSummary{stale: u.errors["metadata"] != "" || u.metadataAt.IsZero() || time.Since(u.metadataAt) > 2*topicMetadataInterval}
+	if md.Err != nil || len(md.Partitions) == 0 {
+		return s
+	}
+	s.complete = true
+	for _, p := range md.Partitions {
+		inSync, assigned := len(p.ISR), len(p.Replicas)
+		if p.Err != nil || assigned == 0 || inSync > assigned {
+			s.complete = false
+			if p.Err == kerr.LeaderNotAvailable {
+				s.critical = true
+				s.degraded++
+			}
+			continue
+		}
+		s.inSync += inSync
+		s.assigned += assigned
+		if inSync < assigned || p.Leader < 0 {
+			s.degraded++
+			if inSync == 0 || assigned-inSync > 1 || p.Leader < 0 {
+				s.critical = true
+			}
+		}
+	}
+	return s
+}
 
 type observationKey struct {
 	group string
@@ -287,11 +325,12 @@ func (u *ui) poll() {
 	if u.workspace == 0 && loc.kind != "picker" && loc.kind != "group" && loc.kind != "group-detail" {
 		md := u.metadata
 		if len(md) == 0 || !time.Now().Before(u.next["metadata"]) {
-			u.sample("metadata", 30*time.Second, func(ctx context.Context, _ func(func())) (func(), error) {
+			u.sample("metadata", topicMetadataInterval, func(ctx context.Context, _ func(func())) (func(), error) {
 				topics, err := u.b.metadata(ctx)
 				if err != nil {
 					return nil, err
 				}
+				at := time.Now()
 				return func() {
 					for name, deadline := range u.deleted {
 						if time.Now().Before(deadline) {
@@ -313,6 +352,7 @@ func (u *ui) poll() {
 						}
 					}
 					u.metadata = topics
+					u.metadataAt = at
 				}, nil
 			})
 		}

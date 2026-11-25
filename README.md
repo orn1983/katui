@@ -79,6 +79,12 @@ The CLI backend opens Consumer Groups (`2`) and provides the Clusters workspace 
 - In **Configure topic**, the Display column shows `.ms` settings in the largest applicable unit. The Raw column shows the exact Kafka value. In **Create topic** and **Configure topic**, enter raw milliseconds or a duration such as `90s`, `1h30m`, `1.2d`, or `6.5w`. The helper shows the accepted units and the exact milliseconds as you type. Use `m` for minutes and `mo` for fixed 30-day months. An `≈` marks a rounded display value. Staging and review retain millisecond precision.
 - Preferences live under `$XDG_CONFIG_HOME/katui/inspectors.json`, or `~/.config/katui/inspectors.json`. Use `--inspector-config` to select a preferences file. Local monitoring snapshots are stored under `$XDG_CACHE_HOME/katui/` or `~/.cache/katui/`. Katui skips the cache with `--no-cache`, custom security settings, or an API, disk, or CLI connection file.
 
+### Check topic replication
+
+In Topics, **ISR/Replicas** counts in-sync replica assignments across all partitions. For example, a topic with two partitions and three replicas each shows `5/6` if one follower falls behind. **Affected P** counts partitions missing an in-sync replica or a leader. Open the topic to see each partition’s `ISR/RF`.
+
+A yellow row means one replica is missing on at least one partition. A red row means a partition has no leader, no in-sync replica, or at least two missing replicas. These colors use the existing topic metadata poll. A `?` means metadata is incomplete, `≥` gives the minimum known number of affected partitions, and `stale` marks the last known observation.
+
 ### Monitor consumer rates
 
 Opening a consumer group starts sampling its partitions at the configured interval (`-i`, five seconds by default). You can open other groups, read records, or work in a dialog and then return to see the intervening history. Each chart keeps up to 90 samples. Groups you only pass over in a list follow that list’s refresh schedule. Katui stops tracking a group when Kafka confirms its deletion or a complete group listing omits it. Switching clusters or quitting ends all background sampling.

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -102,6 +103,26 @@ func (u *ui) relationshipLabel(topic string) string {
 	return value + suffix
 }
 
+func (s isrSummary) overview() (ratio, affected string, color tcell.Color) {
+	ratio, affected = "?", "?"
+	if s.complete {
+		ratio = fmt.Sprintf("%d/%d", s.inSync, s.assigned)
+		affected = fmt.Sprint(s.degraded)
+	} else if s.degraded > 0 {
+		affected = fmt.Sprintf("≥%d", s.degraded)
+	}
+	if s.stale && (s.complete || s.degraded > 0) {
+		ratio += " stale"
+	}
+	switch {
+	case s.critical:
+		color = tcell.ColorRed
+	case s.degraded > 0:
+		color = tcell.ColorYellow
+	}
+	return
+}
+
 func (u *ui) browserRows(loc *location) ([]string, []int, []tableRow) {
 	if loc.kind == "messages" {
 		return u.recordRows()
@@ -156,13 +177,14 @@ func (u *ui) browserRows(loc *location) ([]string, []int, []tableRow) {
 			if u.errors["offsets"] != "" {
 				sampleError = u.errors["offsets"]
 			}
-			rows = append(rows, tableRow{id: name, topic: name, partition: -1, rank: rateRank, rankInteger: rank, cells: []string{
-				name, u.freshness(t.At, sampleError, max(5*time.Second, 3*u.b.interval)), u.relationshipLabel(name), fmt.Sprint(len(md.Partitions)),
+			ratio, affected, color := u.topicISR(md).overview()
+			rows = append(rows, tableRow{id: name, topic: name, partition: -1, rank: rateRank, rankInteger: rank, alertColor: color, cells: []string{
+				name, ratio, affected, u.freshness(t.At, sampleError, max(5*time.Second, 3*u.b.interval)), u.relationshipLabel(name), fmt.Sprint(len(md.Partitions)),
 				number(retained), binarySize(replicaBytes), speed(now, known), clock(m.lastAdvance),
 			}})
 		}
 		sortedRows(rows, loc.sort%4 != 0)
-		return []string{"Topic", "Sample", "Consumers", "P", "Messages~", "Disk (replicas)", "Now/s", "Last observed"}, []int{32, 8, 40, 6, 20, 16, 14, 14}, rows
+		return []string{"Topic", "ISR/Replicas", "Affected P", "Sample", "Consumers", "P", "Messages~", "Disk (replicas)", "Now/s", "Last observed"}, []int{32, 18, 10, 8, 40, 6, 20, 16, 14, 14}, rows
 	case "topic":
 		t := u.topics[loc.topic]
 		parts := t.Partitions

@@ -24,6 +24,7 @@ type location struct {
 type tableRow struct {
 	id           string
 	cells        []string
+	alertColor   tcell.Color
 	topic, group string
 	partition    int32
 	record       *storedRecord
@@ -72,6 +73,7 @@ type ui struct {
 	groupPoll                      *groupPoll
 	nextWatchTick                  atomic.Int64
 	metadata                       kadm.TopicDetails
+	metadataAt                     time.Time
 	topics                         map[string]topicSample
 	sizes                          map[partKey]int64
 	groupNames                     []string
@@ -792,7 +794,11 @@ func (u *ui) updateControls(kind string) string {
 	var actions []string
 	switch kind {
 	case "topics":
-		actions = []string{k("Enter") + " Open", k("g") + " Consumers", k("c") + " Consume", k("a") + " Manage", k("n") + " Create", k("d") + " Delete", k("h") + " Internal"}
+		internalAction := "Show internal"
+		if u.showInternal {
+			internalAction = "Hide internal"
+		}
+		actions = []string{k("Enter") + " Open", k("g") + " Consumers", k("c") + " Consume", k("a") + " Manage", k("n") + " Create", k("d") + " Delete", k("h") + " " + internalAction}
 	case "topic", "topic-detail":
 		actions = []string{k("Esc") + " Back"}
 		if kind == "topic" {
@@ -953,6 +959,10 @@ func (u *ui) renderTable(header []string, width []int, rows []tableRow) {
 	u.table.SetCell(0, 0, browserCell(header, width, loc.horizontal).SetTextColor(u.accent).SetSelectable(false))
 	for i, r := range rows {
 		cell := browserCell(r.cells, width, loc.horizontal)
+		if r.alertColor != tcell.ColorDefault {
+			cell.SetTextColor(r.alertColor)
+			cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(r.alertColor).Bold(true))
+		}
 		if r.checked {
 			cell.SetBackgroundColor(tcell.ColorDarkSlateGray)
 			cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(u.accent).Bold(true).Underline(true))

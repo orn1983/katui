@@ -2,6 +2,7 @@ package katui
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,22 @@ import (
 	"github.com/rivo/tview"
 	"github.com/twmb/franz-go/pkg/kadm"
 )
+
+func TestInternalTopicsToggleNamesNextAction(t *testing.T) {
+	u, screen, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	u.post(func() {
+		u.metadata = kadm.TopicDetails{"__offsets": {Topic: "__offsets", IsInternal: true}}
+		u.refreshView()
+	})
+	for i, label := range []string{"Show internal", "Hide internal", "Show internal"} {
+		if i > 0 {
+			clusterKey(t, screen, tcell.KeyRune, 'h', 0)
+		}
+		waitKeyboardState(t, u, label, func() bool {
+			return strings.Contains(u.controls.GetText(true), label) && len(u.rows) == i%2
+		})
+	}
+}
 
 func TestUIUpdatesAndModalCopy(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())

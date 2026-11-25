@@ -22,7 +22,6 @@ type location struct {
 	sort, row, top, horizontal           int
 }
 type tableRow struct {
-	pinnedOnly   bool
 	id           string
 	cells        []string
 	topic, group string
@@ -116,7 +115,7 @@ func newUI(ctx context.Context, b *broker) *ui {
 		pickerHistory: map[string]*location{}, topics: map[string]topicSample{}, groups: map[string]groupSample{},
 		sizes: map[partKey]int64{}, metrics: map[observationKey]*measurement{}, groupErrors: map[string]string{}, cached: map[string]bool{},
 		deleted: map[string]time.Time{}, errors: map[string]string{}, sessionProfiles: map[string]profile{},
-		readers: map[string]consumeOptions{}, followLatest: true,
+		readers: map[string]consumeOptions{},
 	}
 	u.stacks = [4][]*location{
 		{{kind: "topics", partition: -1}},
@@ -705,7 +704,7 @@ func (u *ui) selectRow(row int) {
 	}
 	loc := u.current()
 	if u.workspace == 2 && loc.selected != u.rows[row-1].id {
-		u.followLatest = false
+		u.stopFollowing()
 	}
 	loc.selected = u.rows[row-1].id
 	loc.row = row - 1
@@ -737,6 +736,34 @@ func (u *ui) openRow() {
 	}
 }
 
+func (u *ui) updateControls(kind string) string {
+	k := keyHint
+	open, back, manage := k("Enter")+" Open", k("Esc")+" Back", k("a")+" Manage"
+	partitions, consume, consumers := k("Enter")+" Partition", k("c")+" Consume", k("g")+" Consumers"
+	sortRefresh := k("s") + " Sort  " + k("r") + " Refresh"
+	follow := tview.Escape("[ ] Follow")
+	if u.followLatest {
+		follow = "[black:" + u.accent.String() + ":b]" + tview.Escape("[x] Follow") + "[-:-:-]"
+	}
+	actions := map[string]string{
+		"topics":       strings.Join([]string{open, consumers, consume, manage, k("n") + " Create", k("d") + " Delete", k("h") + " Internal"}, "  "),
+		"topic":        strings.Join([]string{back, partitions, consumers, consume, manage, k("d") + " Delete"}, "  "),
+		"topic-detail": strings.Join([]string{back, consumers, consume, manage, k("d") + " Delete"}, "  "),
+		"groups":       open + " group  " + manage + "  " + sortRefresh,
+		"picker":       back + "  " + open + " group  " + k("/") + " Search  " + sortRefresh,
+		"group":        strings.Join([]string{back, partitions, manage, consume, k("s") + " Sort"}, "  "),
+		"group-detail": strings.Join([]string{back, manage, consume, k("r") + " Refresh"}, "  "),
+		"messages": strings.Join([]string{
+			back, consume, k("i") + " Records/Payload", k("p") + " Pause", k("x") + " Stop",
+			k("f") + " " + follow, k("z") + " Fullscreen", k("w") + " Compare",
+			k("a") + " Select all", k("n") + " Unselect all",
+		}, "  "),
+	}
+	controls := actions[kind]
+	u.controls.SetText(controls)
+	return controls
+}
+
 func (u *ui) refreshView() {
 	if u.shell == nil {
 		return
@@ -750,13 +777,12 @@ func (u *ui) refreshView() {
 		header += fmt.Sprintf("  ·  %s  ·  poll %s", safe(u.b.cluster, false), u.b.interval)
 	}
 	u.header.SetText(header)
-	k := keyHint
 	labels := []string{"Topics", "Consumer Groups", "Messages", "Clusters"}
 	for i, label := range labels {
 		if i == u.workspace {
 			label = "[black:" + u.accent.String() + ":b] " + label + " [-:-:-]"
 		}
-		labels[i] = k(strconv.Itoa(i+1)) + " " + label
+		labels[i] = keyHint(strconv.Itoa(i+1)) + " " + label
 	}
 	u.tabs.SetText(strings.Join(labels, "  "))
 	if u.workspace == clustersWorkspace {
@@ -766,24 +792,10 @@ func (u *ui) refreshView() {
 		}
 		return
 	}
-	open, back, manage := k("Enter")+" Open", k("Esc")+" Back", k("a")+" Manage"
-	partitions, consume, consumers := k("Enter")+" Partition", k("c")+" Consume", k("g")+" Consumers"
-	sortRefresh := k("s") + " Sort  " + k("r") + " Refresh"
-	actions := map[string]string{
-		"topics":       strings.Join([]string{open, consumers, consume, manage, k("n") + " Create", k("d") + " Delete", k("h") + " Internal"}, "  "),
-		"topic":        strings.Join([]string{back, partitions, consumers, consume, manage, k("d") + " Delete"}, "  "),
-		"topic-detail": strings.Join([]string{back, consumers, consume, manage, k("d") + " Delete"}, "  "),
-		"groups":       open + " group  " + manage + "  " + sortRefresh,
-		"picker":       back + "  " + open + " group  " + k("/") + " Search  " + sortRefresh,
-		"group":        strings.Join([]string{back, partitions, manage, consume, k("s") + " Sort"}, "  "),
-		"group-detail": strings.Join([]string{back, manage, consume, k("r") + " Refresh"}, "  "),
-		"messages":     strings.Join([]string{back, consume, k("i") + " Records/Payload", k("p") + " Pause", k("x") + " Stop", k("f") + " Follow", k("z") + " Fullscreen", k("w") + " Compare", k("e") + " Uncheck"}, "  "),
-	}
-	controls := actions[loc.kind]
-	u.controls.SetText(controls)
+	controls := u.updateControls(loc.kind)
 	controlRows := 1
 	if u.width > 0 && tview.TaggedStringWidth(controls) > u.width {
-		controlRows = 2
+		controlRows = len(tview.WordWrap(controls, u.width))
 	}
 	layout := fmt.Sprintf("%s/%t/%t/%d", loc.kind, u.tableZoom, u.width < 100, controlRows)
 	if layout != u.layout {

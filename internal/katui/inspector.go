@@ -128,9 +128,8 @@ func (p *payloadPane) updateNavigation() {
 	} else if p.nodeView.HasFocus() {
 		mode = p.nodeView.mode
 	}
-	if mode != payloadScroll && p == p.u.inspector && p.u.followLatest {
-		p.u.followLatest = false
-		p.u.say("Follow latest paused to inspect this record. Press f to resume.")
+	if mode != payloadScroll && p == p.u.inspector {
+		p.u.stopFollowing()
 	}
 	line := "Scroll · " + k("Arrows") + " Scroll  " + k("Space") + " Cursor"
 	switch mode {

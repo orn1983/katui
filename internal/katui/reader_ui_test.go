@@ -7,6 +7,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestConsumeStartsAtExactOffsetFromFilter(t *testing.T) {
@@ -52,6 +53,76 @@ func TestConsumeStartsAtExactOffsetFromFilter(t *testing.T) {
 	})
 	key(tcell.KeyRune, 'x', 0)
 	waitKeyboardState(t, u, "reader could not be stopped after the first fetch", func() bool { return u.readerState.state == "STOPPED" })
+}
+
+func TestMessagesFollowAndBulkSelection(t *testing.T) {
+	u, screen, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	if !u.post(func() { u.changeWorkspace(2) }) {
+		t.Fatal("Messages did not open")
+	}
+	appendRecord := func(offset int64) {
+		t.Helper()
+		record, err := saveRecord(&kgo.Record{Topic: migrationTopic, Offset: offset, Value: []byte("message")}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !u.post(func() {
+			u.buffer(record)
+			u.refreshView()
+		}) {
+			t.Fatal("record did not reach Messages")
+		}
+	}
+	waitRecord := func(message string, offset int64, following bool) {
+		t.Helper()
+		box := "[ ] Follow"
+		if following {
+			box = "[x] Follow"
+		}
+		waitKeyboardState(t, u, message, func() bool {
+			activeStyle := "[black:" + u.accent.String() + ":b]" + tview.Escape("[x] Follow")
+			colored := strings.Contains(u.controls.GetText(false), activeStyle)
+			return u.pinned != nil && u.pinned.id.offset == offset && u.followLatest == following &&
+				colored == following && strings.Contains(u.controls.GetText(true), box)
+		})
+	}
+	appendRecord(0)
+	appendRecord(1)
+	waitRecord("Messages moved off the first record by default", 0, false)
+	clusterKey(t, screen, tcell.KeyRune, 'f', 0)
+	waitRecord("Follow did not jump to the newest record", 1, true)
+	appendRecord(2)
+	waitRecord("Follow did not pick up the incoming record", 2, true)
+	clusterKey(t, screen, tcell.KeyUp, 0, 0)
+	waitRecord("moving to an older record did not turn off Follow", 1, false)
+	clusterKey(t, screen, tcell.KeyRune, 'f', 0)
+	waitRecord("Follow did not resume", 2, true)
+	clusterKey(t, screen, tcell.KeyRune, 'f', 0)
+	waitRecord("Follow did not turn off", 2, false)
+	appendRecord(3)
+	waitRecord("incoming record moved the selection after Follow was turned off", 2, false)
+
+	clusterKey(t, screen, tcell.KeyRune, 'f', 0)
+	waitRecord("Follow did not catch up after holding a record", 3, true)
+	clusterKey(t, screen, tcell.KeyRune, 'i', 0)
+	waitKeyboardState(t, u, "i did not enter the payload", func() bool { return u.inspector.viewer.HasFocus() })
+	clusterKey(t, screen, tcell.KeyRune, ' ', 0)
+	waitRecord("Cursor mode did not clear the Follow indicator", 3, false)
+	clusterKey(t, screen, tcell.KeyRune, 'b', 0)
+	waitKeyboardState(t, u, "b did not return to the records", u.table.HasFocus)
+
+	clusterKey(t, screen, tcell.KeyRune, 'a', 0)
+	waitKeyboardState(t, u, "Select all did not check every visible record", func() bool {
+		return len(u.checked) == 4 && strings.Contains(u.controls.GetText(true), "a Select all")
+	})
+	clusterKey(t, screen, tcell.KeyRune, ' ', 0)
+	waitKeyboardState(t, u, "Space did not toggle just the current record", func() bool {
+		return len(u.checked) == 3 && u.isChecked(u.pinned.id) == -1
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'n', 0)
+	waitKeyboardState(t, u, "Unselect all did not clear the checked records", func() bool {
+		return len(u.checked) == 0 && u.checkedBytes == 0 && strings.Contains(u.controls.GetText(true), "n Unselect all")
+	})
 }
 
 func TestMessagesStayResponsiveWhileSpillStorageIsBusy(t *testing.T) {

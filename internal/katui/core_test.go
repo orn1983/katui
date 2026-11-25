@@ -42,6 +42,18 @@ func TestRatesUseElapsedTimeAndPairedLag(t *testing.T) {
 	}
 }
 
+func TestRateChartFramesSamplesAndShowsGaps(t *testing.T) {
+	values := []ratePoint{{rate: 0, known: true}, {}, {rate: 1, known: true}}
+	got := chart(values, 6)
+	want := "Scale 1.0/s  Peak 1.0/s\n┌────┐\n│   █│\n│   █│\n│   █│\n│ ─ █│\n└────┘\n"
+	if got != want {
+		t.Fatalf("rate chart:\n%s\nwant:\n%s", got, want)
+	}
+	if empty := chart(nil, 5); !strings.HasPrefix(empty, "Waiting for rate samples\n┌───┐\n│   │\n") {
+		t.Fatalf("empty rate chart:\n%s", empty)
+	}
+}
+
 func TestConfigDurationExact(t *testing.T) {
 	for input, want := range map[string]string{"1h30m": "5400000", "1.5s": "1500", "1w2d": "777600000", "-1": "-1", "9223372036854775807ms": "9223372036854775807", "0.5ms0.5ms": "1"} {
 		got, err := configValue("retention.ms", input)

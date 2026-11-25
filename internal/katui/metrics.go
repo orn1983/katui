@@ -160,13 +160,15 @@ func (m *measurement) eta(lag *int64, compact bool) string {
 	return (time.Duration(seconds) * time.Second).String()
 }
 func chart(values []ratePoint, width int) string {
-	width = max(1, min(width, 90))
+	width = max(1, min(width-2, 90))
 	if len(values) > width {
 		values = values[len(values)-width:]
 	}
 	peak := 0.0
+	hasSamples := false
 	for _, v := range values {
 		if v.known {
+			hasSamples = true
 			peak = max(peak, v.rate)
 		}
 	}
@@ -183,23 +185,32 @@ func chart(values []ratePoint, width int) string {
 		}
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "Scale %.1f/s  Peak %.1f/s\n", ceiling, peak)
+	if hasSamples {
+		fmt.Fprintf(&out, "Scale %.1f/s  Peak %.1f/s\n", ceiling, peak)
+	} else {
+		out.WriteString("Waiting for rate samples\n")
+	}
+	border := strings.Repeat("─", width)
+	fmt.Fprintf(&out, "┌%s┐\n", border)
 	blocks := []rune(" ▁▂▃▄▅▆▇█")
 	const height = 4
 	for line := height - 1; line >= 0; line-- {
+		out.WriteRune('│')
 		out.WriteString(strings.Repeat(" ", width-len(values)))
 		for _, v := range values {
-			steps := int(math.Ceil(max(0, v.rate)/ceiling*height*8)) - line*8
-			if line == 0 && !v.known {
-				out.WriteRune('?')
-			} else if line == 0 && v.rate == 0 {
-				out.WriteRune('·')
-			} else {
+			switch {
+			case !v.known:
+				out.WriteByte(' ')
+			case line == 0 && v.rate == 0:
+				out.WriteRune('─')
+			default:
+				steps := int(math.Ceil(max(0, v.rate)/ceiling*height*8)) - line*8
 				out.WriteRune(blocks[max(0, min(8, steps))])
 			}
 		}
-		out.WriteByte('\n')
+		out.WriteString("│\n")
 	}
+	fmt.Fprintf(&out, "└%s┘\n", border)
 	return out.String()
 }
 

@@ -19,7 +19,7 @@ func (u *ui) resetMessages() {
 	u.recordBytes = 0
 	u.checkedBytes = 0
 	u.evictions = 0
-	u.followLatest = true
+	u.followLatest = false
 	*u.stacks[2][0] = location{kind: "messages", partition: -1}
 	for _, r := range old {
 		u.release(r)
@@ -139,7 +139,7 @@ func (u *ui) recordRows() ([]string, []int, []tableRow) {
 		if pinned {
 			value = "(pinned) " + value
 		}
-		rows = append(rows, tableRow{pinnedOnly: pinned, id: r.id.String(), topic: r.id.Topic, partition: r.id.Partition, record: r, cells: []string{
+		rows = append(rows, tableRow{id: r.id.String(), topic: r.id.Topic, partition: r.id.Partition, record: r, cells: []string{
 			check, payloadAvailability(r), clock(r.timestamp), shortened(key, 100), fmt.Sprint(r.id.Partition), integer(r.id.offset), shortened(value, 300),
 		}})
 	}
@@ -156,6 +156,13 @@ func payloadAvailability(r *storedRecord) string {
 		return "Preview only"
 	}
 	return "Complete"
+}
+
+func (u *ui) stopFollowing() {
+	if u.followLatest {
+		u.followLatest = false
+		u.updateControls("messages")
+	}
 }
 
 func (u *ui) clearBuffer() {
@@ -184,11 +191,6 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 	case 'f':
 		u.followLatest = !u.followLatest
 		u.refreshView()
-		if u.followLatest {
-			u.say("Follow latest ON")
-		} else {
-			u.say("Follow latest OFF")
-		}
 	case 'i':
 		if pane != nil {
 			if pane.root.HasFocus() {
@@ -204,7 +206,7 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 		return ev
 	case 'w':
 		u.comparison()
-	case 'e':
+	case 'n':
 		old := u.checked
 		u.checked = nil
 		u.checkedBytes = 0
@@ -221,12 +223,9 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 		}
 		return ev
 	case 'a':
-		if !u.table.HasFocus() {
-			return ev
-		}
 		skipped := 0
 		for _, row := range u.rows {
-			if !row.pinnedOnly && !u.addCheck(row.record) {
+			if !u.addCheck(row.record) {
 				skipped++
 			}
 		}

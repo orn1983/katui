@@ -366,7 +366,7 @@ func (u *ui) updateStatus() {
 		if len(u.readOptions.partitions) > 0 {
 			stream := "snapshot"
 			if u.readOptions.follow {
-				stream = "follow"
+				stream = "live"
 			}
 			summary += fmt.Sprintf(" · P%v %s limit %d", u.readOptions.partitions, stream, u.readOptions.limit)
 			if u.readOptions.start == startOffset {

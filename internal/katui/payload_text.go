@@ -146,6 +146,7 @@ type payloadText struct {
 	dragging       bool
 	mode           payloadTextMode
 	modeChanged    func()
+	onSelect       func()
 	copy           func(string)
 }
 
@@ -220,11 +221,20 @@ func runeStart(text string, offset int) int {
 	return offset
 }
 
-func (v *payloadText) selectBy(cursor int, extend bool) {
-	v.cursor = runeStart(v.doc.text, max(0, min(len(v.doc.text), cursor)))
-	if !extend {
-		v.anchor = v.cursor
+func (v *payloadText) selectRange(anchor, cursor int) {
+	if v.onSelect != nil {
+		v.onSelect()
 	}
+	v.anchor, v.cursor = anchor, cursor
+}
+
+func (v *payloadText) selectBy(cursor int, extend bool) {
+	cursor = runeStart(v.doc.text, max(0, min(len(v.doc.text), cursor)))
+	anchor := cursor
+	if extend {
+		anchor = v.anchor
+	}
+	v.selectRange(anchor, cursor)
 	v.ensureVisible()
 }
 
@@ -337,12 +347,12 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 			v.copy(v.selectedText())
 			return
 		case key == tcell.KeyCtrlA:
-			v.anchor, v.cursor = 0, len(v.doc.text)
+			v.selectRange(0, len(v.doc.text))
 			return
 		case letter == ' ':
 			if v.mode == payloadScroll {
 				v.placeVisibleCursor()
-				v.anchor = v.cursor
+				v.selectRange(v.cursor, v.cursor)
 				v.setMode(payloadCursor)
 			} else {
 				v.setMode(payloadScroll)
@@ -351,7 +361,7 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 		case letter == 'v':
 			switch v.mode {
 			case payloadCursor:
-				v.anchor = v.cursor
+				v.selectRange(v.cursor, v.cursor)
 				v.setMode(payloadSelection)
 			case payloadSelection:
 				v.setMode(payloadCursor)

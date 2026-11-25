@@ -125,6 +125,94 @@ func TestMessagesFollowAndBulkSelection(t *testing.T) {
 	})
 }
 
+func TestInspectorSelectionKeepsOriginalRecord(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"mouse drag", "first"},
+		{"select all", "first payload"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SSH_CONNECTION", "test") // Use the simulated terminal clipboard.
+			screen := clipboardScreen{tcell.NewSimulationScreen("UTF-8"), make(chan string, 1)}
+			u, _ := startClusterUIWithScreen(t, nil, screen, "-b", "127.0.0.1:1")
+			original := retainedRecord(t, nil, []byte("first payload"))
+			arrival := retainedRecord(t, nil, []byte("second payload"))
+			arrival.id.offset = 1
+			u.post(func() {
+				screen.SetSize(150, 45)
+				u.changeWorkspace(2)
+				u.buffer(original)
+				u.refreshView()
+			})
+			clusterKey(t, screen, tcell.KeyRune, 'f', 0)
+			clusterKey(t, screen, tcell.KeyRune, 'i', 0)
+			var x, y int
+			waitKeyboardState(t, u, "inspector did not open with Follow enabled", func() bool {
+				view := u.inspector.viewer
+				var w, h int
+				x, y, w, h = view.GetInnerRect()
+				return u.followLatest && view.HasFocus() && view.doc.text == "first payload" && w >= 6 && h > 0
+			})
+
+			if tc.name == "mouse drag" {
+				if err := screen.PostEvent(tcell.NewEventMouse(x, y, tcell.Button1, 0)); err != nil {
+					t.Fatal(err)
+				}
+				waitKeyboardState(t, u, "drag did not pin the record on mouse-down", func() bool {
+					return u.inspector.viewer.dragging && !u.followLatest
+				})
+			} else {
+				clusterKey(t, screen, tcell.KeyCtrlA, 0, tcell.ModCtrl)
+				waitKeyboardState(t, u, "select all did not select the first payload", func() bool {
+					return u.inspector.viewer.selectedText() == tc.want && !u.followLatest
+				})
+			}
+
+			u.post(func() { u.buffer(arrival); u.refreshView() })
+			if tc.name == "mouse drag" {
+				for _, button := range []tcell.ButtonMask{tcell.Button1, tcell.ButtonNone} {
+					if err := screen.PostEvent(tcell.NewEventMouse(x+5, y, button, 0)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			clusterKey(t, screen, tcell.KeyCtrlC, 0, tcell.ModCtrl)
+			select {
+			case copied := <-screen.copied:
+				if copied != tc.want {
+					t.Fatalf("copied %q after a new arrival, want %q", copied, tc.want)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("selected payload did not reach the clipboard")
+			}
+			clusterKey(t, screen, tcell.KeyRune, 'f', 0)
+			waitKeyboardState(t, u, "Follow did not resume at the buffered arrival", func() bool {
+				return u.followLatest && u.pinned == arrival && u.inspector.viewer.doc.text == "second payload"
+			})
+		})
+	}
+}
+
+func TestClearingInspectorDiscardsTreeAndRestoresFocus(t *testing.T) {
+	u, _, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	record := retainedRecord(t, nil, []byte(`{"order":{"id":42}}`))
+	u.post(func() {
+		u.changeWorkspace(2)
+		u.buffer(record)
+		u.refreshView()
+		u.inspector.changeMode("tree")
+		u.inspector.focusViewer()
+	})
+	waitKeyboardState(t, u, "tree was not rendered and focused", func() bool {
+		p := u.inspector
+		return p.tree.HasFocus() && p.tree.GetRoot() != nil && p.tree.GetRowCount() > 1
+	})
+	u.post(u.clearBuffer)
+	waitKeyboardState(t, u, "cleared inspector kept the previous decoded tree or a hidden focus", func() bool {
+		p := u.inspector
+		return p.tree.GetRoot() == nil && p.tree.GetRowCount() == 0 && p.nodeView.doc.text == "" && p.viewer.HasFocus()
+	})
+}
+
 func TestMessagesStayResponsiveWhileSpillStorageIsBusy(t *testing.T) {
 	u, screen, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
 	dir := t.TempDir()

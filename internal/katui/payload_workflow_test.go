@@ -378,6 +378,16 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	waitFor("search did not jump past the old display boundary", func() bool {
 		return p.viewer.match[0] > maxRenderedPayload && p.viewer.left > maxRenderedPayload
 	})
+	u.post(func() { p.search.SetText("absent-from-payload") })
+	waitFor("an unmatched query kept the old highlight", func() bool {
+		return p.status.GetText(true) == "No matches" && p.viewer.match == [2]int{}
+	})
+	u.post(func() { p.search.SetText("") })
+	waitFor("clearing search kept a stale match status", func() bool {
+		return !strings.Contains(strings.ToLower(p.status.GetText(true)), "match")
+	})
+	u.post(func() { p.search.SetText(marker) })
+	waitFor("search did not restore the highlight", func() bool { return p.viewer.match[1] > maxRenderedPayload })
 	u.post(func() {
 		p.focusViewer()
 		p.viewer.selectBy(p.viewer.match[0], false)

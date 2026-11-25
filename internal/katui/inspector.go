@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -54,8 +53,10 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	p.viewer = newPayloadText(p.copyText)
 	p.nodeView = newPayloadText(p.copyText)
 	p.viewer.modeChanged, p.nodeView.modeChanged = p.updateNavigation, p.updateNavigation
-	p.tree = tview.NewTreeView()
-	p.tree.SetFocusFunc(p.updateNavigation)
+	if !full && !comparison {
+		p.viewer.onSelect, p.nodeView.onSelect = u.stopFollowing, u.stopFollowing
+	}
+	p.tree = p.newTreeView()
 	p.updateNavigation()
 	p.mode = tview.NewButton("").SetSelectedFunc(p.chooseFormat)
 	p.delimButton = tview.NewButton(buttonLabel("Delimiter", "d")).SetSelectedFunc(p.delimiterDialog)
@@ -69,42 +70,6 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 		}
 	})
 	p.metadata.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey { return u.viewerKeys(ev, nil, p.metadata) })
-	p.tree.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
-		current := p.tree.GetCurrentNode()
-		if current != nil {
-			if e.Key() == tcell.KeyLeft {
-				if current.IsExpanded() && len(current.GetChildren()) > 0 {
-					current.Collapse()
-				} else if n, ok := current.GetReference().(*payloadNode); ok && n.parent != nil {
-					p.tree.SetCurrentNode(n.parent.widget)
-					p.showNode(n.parent)
-				}
-				return nil
-			}
-			if e.Key() == tcell.KeyRight {
-				if !current.IsExpanded() {
-					current.Expand()
-				} else if children := current.GetChildren(); len(children) > 0 {
-					p.tree.SetCurrentNode(children[0])
-					p.showNode(children[0].GetReference().(*payloadNode))
-				}
-				return nil
-			}
-		}
-		return u.viewerKeys(e, nil, nil)
-	})
-	p.tree.SetChangedFunc(func(n *tview.TreeNode) {
-		if v, ok := n.GetReference().(*payloadNode); ok {
-			p.showNode(v)
-		}
-	})
-	p.tree.SetSelectedFunc(func(n *tview.TreeNode) {
-		if n.IsExpanded() {
-			n.Collapse()
-		} else {
-			n.Expand()
-		}
-	})
 	if len(records) > 0 {
 		p.profileTopic = records[0].id.Topic
 		p.modeName = u.profile(p.profileTopic).Mode
@@ -114,6 +79,48 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	}
 	p.rebuild()
 	return p
+}
+
+func (p *payloadPane) newTreeView() *tview.TreeView {
+	tree := tview.NewTreeView()
+	tree.SetFocusFunc(p.updateNavigation)
+	tree.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
+		current := tree.GetCurrentNode()
+		if current != nil {
+			if e.Key() == tcell.KeyLeft {
+				if current.IsExpanded() && len(current.GetChildren()) > 0 {
+					current.Collapse()
+				} else if n, ok := current.GetReference().(*payloadNode); ok && n.parent != nil {
+					tree.SetCurrentNode(n.parent.widget)
+					p.showNode(n.parent)
+				}
+				return nil
+			}
+			if e.Key() == tcell.KeyRight {
+				if !current.IsExpanded() {
+					current.Expand()
+				} else if children := current.GetChildren(); len(children) > 0 {
+					tree.SetCurrentNode(children[0])
+					p.showNode(children[0].GetReference().(*payloadNode))
+				}
+				return nil
+			}
+		}
+		return p.u.viewerKeys(e, nil, nil)
+	})
+	tree.SetChangedFunc(func(n *tview.TreeNode) {
+		if v, ok := n.GetReference().(*payloadNode); ok {
+			p.showNode(v)
+		}
+	})
+	tree.SetSelectedFunc(func(n *tview.TreeNode) {
+		if n.IsExpanded() {
+			n.Collapse()
+		} else {
+			n.Expand()
+		}
+	})
+	return tree
 }
 
 func (p *payloadPane) updateNavigation() {
@@ -127,9 +134,6 @@ func (p *payloadPane) updateNavigation() {
 		mode = p.viewer.mode
 	} else if p.nodeView.HasFocus() {
 		mode = p.nodeView.mode
-	}
-	if mode != payloadScroll && p == p.u.inspector {
-		p.u.stopFollowing()
 	}
 	line := "Scroll · " + k("Arrows") + " Scroll  " + k("Space") + " Cursor"
 	switch mode {
@@ -173,9 +177,13 @@ func (p *payloadPane) rebuild() {
 		p.dialog.focusables = p.focusables()
 	}
 }
+func (p *payloadPane) showingTree() bool {
+	return !p.metadataTab && p.result.tree != nil && treeMode(p.modeName)
+}
+
 func (p *payloadPane) layout() {
 	p.content.Clear()
-	if p.metadataTab || p.result.tree == nil || !treeMode(p.modeName) {
+	if !p.showingTree() {
 		p.content.AddItem(p.viewer, 0, 1, true)
 	} else {
 		p.content.AddItem(p.tree, 0, 2, true).AddItem(p.nodeView, 0, 1, false)
@@ -183,7 +191,7 @@ func (p *payloadPane) layout() {
 }
 func (p *payloadPane) focusables() []tview.Primitive {
 	controls := []tview.Primitive{p.viewer}
-	if p.result.tree != nil && !p.metadataTab && treeMode(p.modeName) {
+	if p.showingTree() {
 		controls = []tview.Primitive{p.tree, p.nodeView}
 	}
 	if p.full {
@@ -219,7 +227,7 @@ func (p *payloadPane) cycle(reverse bool) bool {
 }
 func (p *payloadPane) focusViewer() {
 	p.root.SetBorderColor(p.u.accent)
-	if p.result.tree != nil && !p.metadataTab && treeMode(p.modeName) {
+	if p.showingTree() {
 		p.u.app.SetFocus(p.tree)
 	} else {
 		p.u.app.SetFocus(p.viewer)
@@ -254,12 +262,7 @@ func (p *payloadPane) topics() []string {
 	for _, r := range p.records {
 		set[r.id.Topic] = true
 	}
-	result := make([]string, 0, len(set))
-	for topic := range set {
-		result = append(result, topic)
-	}
-	sort.Strings(result)
-	return result
+	return sortedKeys(set)
 }
 func (p *payloadPane) setRecords(records []*storedRecord) {
 	p.records = records
@@ -317,6 +320,11 @@ func (p *payloadPane) cancelRender() {
 func (p *payloadPane) refresh() {
 	p.cancelRender()
 	p.loadCanceled = false
+	hadTreeFocus := p.tree.HasFocus() || p.nodeView.HasFocus()
+	if p.tree.GetRoot() != nil {
+		// The widget caches visible nodes with references to the decoded payload.
+		p.tree = p.newTreeView()
+	}
 	p.result = payloadResult{}
 	p.textMatches = nil
 	p.treeMatches = nil
@@ -329,7 +337,10 @@ func (p *payloadPane) refresh() {
 	p.viewer.setDocument(payloadDocument{})
 	p.nodeView.setDocument(payloadDocument{})
 	p.layout()
-	if p.dialog != nil && (p.tree.HasFocus() || p.nodeView.HasFocus()) {
+	if p.dialog != nil {
+		p.dialog.focusables = p.focusables()
+	}
+	if hadTreeFocus {
 		p.focusViewer()
 	}
 	if p.metadataTab {
@@ -379,22 +390,16 @@ func (p *payloadPane) refresh() {
 			p.result = result
 			p.document = doc
 			p.updateLoadButton()
-			notice := tview.Escape(safe(strings.ReplaceAll(result.warning, "\n", " · "), false))
-			if p.canLoadFull() {
-				notice = keyHint("Alt+L") + " Load full · " + notice
+			if !p.full {
+				p.showRenderStatus()
 			}
-			if notice == "" && p.dialog == nil {
-				k := keyHint
-				notice = k("?") + " Copy actions · " + k("s") + " Save · " + k("z") + " Fullscreen"
-			}
-			p.status.SetText(notice)
 			if p.dialog != nil && result.warning != "" {
 				p.dialog.say(result.warning)
 			}
 			if !p.metadataTab {
 				p.viewer.setDocument(doc)
 				if result.tree != nil {
-					root := p.addNode(result.tree)
+					root := result.tree.treeWidget()
 					p.tree.SetRoot(root).SetCurrentNode(root)
 					root.Expand()
 					p.showNode(result.tree)
@@ -413,33 +418,24 @@ func (p *payloadPane) refresh() {
 		})
 	}()
 }
-func (p *payloadPane) addNode(node *payloadNode) *tview.TreeNode {
-	if node.widget != nil {
-		return node.widget
+func (n *payloadNode) treeWidget() *tview.TreeNode {
+	if n.widget == nil {
+		n.widget = tview.NewTreeNode(shortened(safe(n.label, false), 240)).SetReference(n).SetExpanded(false)
 	}
-	w := tview.NewTreeNode(shortened(safe(node.label, false), 240)).SetReference(node).SetExpanded(false)
-	node.widget = w
-	// Each visible node has bounded fan-out in full mode.
-	for _, child := range node.children {
-		placeholder := tview.NewTreeNode(shortened(safe(child.label, false), 240)).SetReference(child).SetExpanded(false)
-		child.widget = placeholder
-		w.AddChild(placeholder)
-	}
-	return w
+	return n.widget
 }
-func (p *payloadPane) materialize(node *payloadNode) {
-	w := node.widget
-	if w == nil {
-		w = p.addNode(node)
-	}
+
+func (n *payloadNode) materialize() {
+	w := n.treeWidget()
 	if len(w.GetChildren()) == 0 {
-		for _, child := range node.children {
-			w.AddChild(p.addNode(child))
+		for _, child := range n.children {
+			w.AddChild(child.treeWidget())
 		}
 	}
 }
+
 func (p *payloadPane) showNode(n *payloadNode) {
-	p.materialize(n)
+	n.materialize()
 	if p.nodeCancel != nil {
 		p.nodeCancel()
 	}
@@ -494,14 +490,6 @@ func (p *payloadPane) showMetadata(on bool) {
 	p.layout()
 	if hadFocus {
 		p.focusViewer()
-	}
-}
-
-func (p *payloadPane) setTextMatch(match []int) {
-	p.viewer.match = [2]int{}
-	if len(match) == 2 {
-		p.viewer.match = [2]int{match[0], match[1]}
-		p.viewer.selectBy(match[0], false)
 	}
 }
 
@@ -565,6 +553,18 @@ func (p *payloadPane) loadFull() {
 	p.u.app.SetFocus(load)
 }
 
+func (p *payloadPane) showRenderStatus() {
+	notice := tview.Escape(safe(strings.ReplaceAll(p.result.warning, "\n", " · "), false))
+	if p.canLoadFull() {
+		notice = keyHint("Alt+L") + " Load full · " + notice
+	}
+	if notice == "" && p.dialog == nil {
+		k := keyHint
+		notice = k("?") + " Copy actions · " + k("s") + " Save · " + k("z") + " Fullscreen"
+	}
+	p.status.SetText(notice)
+}
+
 func (p *payloadPane) scheduleSearch() {
 	if !p.full || p.rendering {
 		return
@@ -581,8 +581,9 @@ func (p *payloadPane) scheduleSearch() {
 	p.textMatches = nil
 	p.treeMatches = nil
 	p.matchesLimited = false
+	p.viewer.match = [2]int{}
 	if query == "" {
-		p.setTextMatch(nil)
+		p.showRenderStatus()
 		return
 	}
 	if len(query) > 4096 {
@@ -681,7 +682,7 @@ func (p *payloadPane) advance(change int) {
 		}
 		for i := len(path) - 1; i >= 0; i-- {
 			n := path[i]
-			p.materialize(n)
+			n.materialize()
 			if i > 0 {
 				n.widget.Expand()
 			}
@@ -689,7 +690,9 @@ func (p *payloadPane) advance(change int) {
 		p.tree.SetCurrentNode(node.widget)
 		p.showNode(node)
 	} else {
-		p.setTextMatch(p.textMatches[p.match])
+		hit := p.textMatches[p.match]
+		p.viewer.match = [2]int{hit[0], hit[1]}
+		p.viewer.selectBy(hit[0], false)
 	}
 }
 func (p *payloadPane) shortcut(key rune) bool {

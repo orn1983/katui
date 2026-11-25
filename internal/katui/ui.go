@@ -106,6 +106,7 @@ type ui struct {
 	checked                        []*storedRecord
 	modalPayloads                  []*payloadPane
 	payloadJobs                    map[*storedRecord]int
+	clipboardRequest               uint64
 	checkedBytes                   int
 	pinned                         *storedRecord
 	followLatest                   bool
@@ -163,6 +164,9 @@ func (u *ui) run() error {
 	defer func() {
 		close(u.shuttingDown)
 		cancel()
+		if u.inspector != nil {
+			u.inspector.cancelRender()
+		}
 		u.stopReader()
 		if u.store != nil {
 			u.store.close()
@@ -493,6 +497,14 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		}
 	}
 	if ev.Key() == tcell.KeyEscape && u.modalDepth == 0 {
+		if u.workspace == 2 && u.tableZoom {
+			if u.search.HasFocus() {
+				u.focus(u.table)
+			} else {
+				u.back()
+			}
+			return nil
+		}
 		if v, ok := u.app.GetFocus().(*payloadText); ok && v.exitMode() {
 			return nil
 		}
@@ -586,8 +598,10 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 			}
 			return nil
 		}
-		u.tableZoom = false
-		u.refreshView()
+		if u.workspace != 2 && u.tableZoom {
+			u.tableZoom = false
+			u.refreshView()
+		}
 		u.focus(u.search)
 	case '4':
 		u.showClusters()
@@ -596,7 +610,7 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	case '?':
 		u.palette()
 	case 'z':
-		if u.workspace == 2 {
+		if u.workspace == 2 && !u.tableZoom && u.inspector != nil && u.inspector.root.HasFocus() {
 			u.fullscreenRecord()
 			return nil
 		}
@@ -673,6 +687,9 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 
 func (u *ui) cycleFocus(reverse bool) {
 	if u.tableZoom {
+		if u.workspace == 2 {
+			u.focus(u.search)
+		}
 		return
 	}
 	if u.workspace == 2 && u.inspector != nil {
@@ -756,9 +773,17 @@ func (u *ui) openRow() {
 	case "group":
 		u.push(&location{kind: "group-detail", group: row.group, topic: row.topic, partition: row.partition})
 	case "messages":
-		if u.inspector != nil {
-			u.inspector.focusViewer()
-		}
+		u.inspectSelectedRecord()
+	}
+}
+
+func (u *ui) inspectSelectedRecord() {
+	if u.tableZoom {
+		u.tableZoom = false
+		u.refreshView()
+	}
+	if u.inspector != nil {
+		u.inspector.focusViewer()
 	}
 }
 
@@ -801,7 +826,7 @@ func (u *ui) updateControls(kind string) string {
 			follow = "[black:" + u.accent.String() + ":b]" + tview.Escape("[x] Follow") + "[-:-:-]"
 		}
 		actions = []string{k("Esc") + " Back", k("c") + " Consume", k("i") + " Records/Payload", k("p") + " Pause", k("x") + " Stop",
-			k("f") + " " + follow, k("z") + " Fullscreen", k("w") + " Compare", k("a") + " Select all", k("n") + " Unselect all"}
+			k("f") + " " + follow, k("z") + " Zoom focused pane", k("w") + " Compare", k("a") + " Select all", k("n") + " Unselect all"}
 	}
 	controls := strings.Join(actions, "  ")
 	u.controls.SetText(controls)
@@ -813,6 +838,10 @@ func (u *ui) refreshView() {
 		return
 	}
 	loc := u.current()
+	showInspector := loc.kind == "messages" && !u.tableZoom
+	if !showInspector && u.inspector != nil {
+		u.inspector.setPreviewVisible(false)
+	}
 	header := "Katui"
 	if u.b.cluster != "" {
 		if u.b.profileName != "" {
@@ -854,10 +883,13 @@ func (u *ui) refreshView() {
 		}
 		u.shell.Clear().AddItem(u.header, 1, 0, false)
 		if !u.tableZoom {
-			u.shell.AddItem(u.tabs, 1, 0, false).AddItem(u.controls, controlRows, 0, false).AddItem(u.search, 1, 0, false)
+			u.shell.AddItem(u.tabs, 1, 0, false).AddItem(u.controls, controlRows, 0, false)
+		}
+		if !u.tableZoom || loc.kind == "messages" {
+			u.shell.AddItem(u.search, 1, 0, false)
 		}
 		u.shell.AddItem(u.body, 0, 1, true).AddItem(u.status, statusRows, 0, false)
-		if loc.kind == "messages" {
+		if showInspector {
 			if u.inspector == nil {
 				u.inspector = u.newPayloadPane(false, false, nil)
 			}
@@ -893,6 +925,9 @@ func (u *ui) refreshView() {
 		u.renderTable(header, width, rows)
 	}
 	if loc.kind == "messages" {
+		if showInspector {
+			u.inspector.setPreviewVisible(true)
+		}
 		u.readerViewDirty.Store(false)
 		u.nextReaderRefresh = time.Now().Add(50 * time.Millisecond)
 	}
@@ -936,6 +971,9 @@ func (u *ui) renderTable(header []string, width []int, rows []tableRow) {
 		loc.selected = ""
 		loc.row = 0
 		u.table.Select(0, 0).SetOffset(0, 0)
+		if loc.kind == "messages" {
+			u.pin(nil)
+		}
 	}
 	u.updatingTable = false
 }

@@ -370,7 +370,7 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	u.post(func() {
 		p.refresh()
 		p.dialog.cancel()
-		if p.rendering || p.renderCancel != nil || p.dialog.closed || !p.result.incomplete || !p.loadCanceled {
+		if p.rendering || p.renderJob != nil || p.dialog.closed || !p.result.incomplete || !p.loadCanceled {
 			t.Error("Esc did not cancel just the loading operation")
 		}
 	})

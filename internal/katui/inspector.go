@@ -12,6 +12,13 @@ import (
 	"github.com/rivo/tview"
 )
 
+const previewScrollDelay = 60 * time.Millisecond
+
+type payloadRenderJob struct {
+	cancel      context.CancelFunc
+	copyRequest uint64
+}
+
 type payloadPane struct {
 	u                                        *ui
 	root, bar, content                       *tview.Flex
@@ -30,13 +37,16 @@ type payloadPane struct {
 	full, comparison, metadataTab            bool
 	modeName, profileTopic                   string
 	result                                   payloadResult
-	renderCancel, searchCancel, nodeCancel   context.CancelFunc
+	renderJob                                *payloadRenderJob
+	searchCancel, nodeCancel                 context.CancelFunc
 	revision, searchRevision, nodeRevision   uint64
 	textMatches                              [][]int
 	treeMatches                              []*payloadNode
 	match                                    int
 	matchesLimited                           bool
 	rendering                                bool
+	previewTimer                             *time.Timer
+	previewHidden                            bool
 }
 
 func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *payloadPane {
@@ -226,6 +236,7 @@ func (p *payloadPane) cycle(reverse bool) bool {
 	return true
 }
 func (p *payloadPane) focusViewer() {
+	p.flushPreview()
 	p.root.SetBorderColor(p.u.accent)
 	if p.showingTree() {
 		p.u.app.SetFocus(p.tree)
@@ -264,17 +275,66 @@ func (p *payloadPane) topics() []string {
 	}
 	return sortedKeys(set)
 }
-func (p *payloadPane) setRecords(records []*storedRecord) {
-	p.records = records
-	if len(records) > 0 {
-		p.profileTopic = records[0].id.Topic
-		p.modeName = p.u.profile(p.profileTopic).Mode
-		p.metadata.SetText(metadataText(records[0]))
-	} else {
+func (p *payloadPane) setRecord(record *storedRecord) {
+	first := len(p.records) == 0
+	if record == nil {
+		p.records = nil
+		p.clearRender()
 		p.profileTopic = ""
 		p.metadata.SetText("Select a record")
+		return
 	}
-	p.rebuild()
+	p.records = []*storedRecord{record}
+	if p.previewTimer == nil && !p.previewHidden {
+		p.clearRender()
+	} else {
+		// The previous document was already cleared when scrolling began.
+		p.cancelRender()
+	}
+	p.profileTopic = record.id.Topic
+	mode := p.u.profile(p.profileTopic).Mode
+	if p.modeName != mode {
+		p.modeName = mode
+		p.rebuild()
+	}
+	if p.previewHidden {
+		return
+	}
+	if first || p.u.followLatest || p.root.HasFocus() {
+		p.startRender()
+		return
+	}
+	p.metadata.SetText("")
+	p.status.SetText("Preparing preview…")
+	revision := p.revision
+	p.previewTimer = time.AfterFunc(previewScrollDelay, func() {
+		p.u.post(func() {
+			if p.revision == revision {
+				p.flushPreview()
+			}
+		})
+	})
+}
+
+func (p *payloadPane) flushPreview() {
+	if p.previewTimer != nil {
+		p.previewTimer.Stop()
+		p.previewTimer = nil
+		p.startRender()
+	}
+}
+
+func (p *payloadPane) setPreviewVisible(visible bool) {
+	if visible == !p.previewHidden {
+		return
+	}
+	p.previewHidden = !visible
+	if visible && p.rendering {
+		// A list-only Copy View is already preparing this record.
+		p.metadata.SetText(metadataText(p.records[0]))
+		p.status.SetText("Preparing payload…")
+		return
+	}
 	p.refresh()
 }
 func (p *payloadPane) changeMode(mode string) {
@@ -301,6 +361,11 @@ func (p *payloadPane) notice(text string) {
 	}
 }
 func (p *payloadPane) cancelRender() {
+	if p.previewTimer != nil {
+		p.previewTimer.Stop()
+		p.previewTimer = nil
+	}
+	p.rendering = false
 	p.revision++
 	p.searchRevision++
 	p.nodeRevision++
@@ -312,12 +377,22 @@ func (p *payloadPane) cancelRender() {
 		p.nodeCancel()
 		p.nodeCancel = nil
 	}
-	if p.renderCancel != nil {
-		p.renderCancel()
-		p.renderCancel = nil
+	if job := p.renderJob; job != nil {
+		// An explicit copy still owns its source if the selection changes.
+		if job.copyRequest == 0 || job.copyRequest != p.u.clipboardRequest {
+			job.cancel()
+		}
+		p.renderJob = nil
 	}
 }
 func (p *payloadPane) refresh() {
+	p.clearRender()
+	if !p.previewHidden {
+		p.startRender()
+	}
+}
+
+func (p *payloadPane) clearRender() {
 	p.cancelRender()
 	p.loadCanceled = false
 	hadTreeFocus := p.tree.HasFocus() || p.nodeView.HasFocus()
@@ -340,19 +415,25 @@ func (p *payloadPane) refresh() {
 	if p.dialog != nil {
 		p.dialog.focusables = p.focusables()
 	}
-	if hadTreeFocus {
+	if hadTreeFocus && !p.previewHidden {
 		p.focusViewer()
 	}
 	if p.metadataTab {
 		p.showMetadata(true)
 	}
+}
+
+func (p *payloadPane) startRender() {
 	if len(p.records) == 0 {
-		p.rendering = false
 		p.updateLoadButton()
 		return
 	}
+	if !p.previewHidden && !p.full && !p.comparison {
+		p.metadata.SetText(metadataText(p.records[0]))
+	}
 	ctx, cancel := context.WithCancel(p.u.ctx)
-	p.renderCancel = cancel
+	job := &payloadRenderJob{cancel: cancel}
+	p.renderJob = job
 	revision := p.revision
 	records := append([]*storedRecord{}, p.records...)
 	preferences := map[string]profile{}
@@ -364,13 +445,15 @@ func (p *payloadPane) refresh() {
 	release := p.u.holdPayloads(records)
 	p.rendering = true
 	p.updateLoadButton()
-	p.status.SetText("Preparing payload…")
-	if p.full {
+	if !p.previewHidden {
 		status := "Preparing payload…"
 		if p.expanded {
 			status = "Loading full payload…"
 		}
-		p.status.SetText(status + "  " + keyHint("Esc") + " Cancel")
+		if p.full {
+			status += "  " + keyHint("Esc") + " Cancel"
+		}
+		p.status.SetText(status)
 	}
 	go func() {
 		defer cancel()
@@ -383,10 +466,20 @@ func (p *payloadPane) refresh() {
 		result.text = doc.text
 		p.u.post(func() {
 			release()
-			if p.revision != revision || ctx.Err() != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if job.copyRequest != 0 && job.copyRequest == p.u.clipboardRequest {
+				p.copyRendered(result)
+			}
+			if p.revision != revision {
 				return
 			}
 			p.rendering = false
+			p.renderJob = nil
+			if p.previewHidden {
+				return
+			}
 			p.result = result
 			p.document = doc
 			p.updateLoadButton()
@@ -696,29 +789,30 @@ func (p *payloadPane) advance(change int) {
 	}
 }
 func (p *payloadPane) shortcut(key rune) bool {
+	var action func()
 	switch key {
 	case 'm':
-		p.chooseFormat()
+		action = p.chooseFormat
 	case 'd':
 		if !csvMode(p.modeName) {
 			return false
 		}
-		p.delimiterDialog()
+		action = p.delimiterDialog
 	case 'h':
 		if !csvMode(p.modeName) {
 			return false
 		}
-		p.toggleHeader()
+		action = p.toggleHeader
 	case 'o':
 		if !csvMode(p.modeName) {
 			return false
 		}
-		p.editProfile(true)
+		action = func() { p.editProfile(true) }
 	case 'u':
 		if !protoMode(p.modeName) {
 			return false
 		}
-		p.editProfile(false)
+		action = func() { p.editProfile(false) }
 	case 'y':
 		for _, view := range []*payloadText{p.viewer, p.nodeView} {
 			if view.HasFocus() && (view.mode == payloadSelection || view.anchor != view.cursor) {
@@ -730,21 +824,29 @@ func (p *payloadPane) shortcut(key rune) bool {
 				return true
 			}
 		}
-		p.copyView()
-	case copyValueKey:
-		p.copyValue()
+		fallthrough
 	case copyViewKey:
 		p.copyView()
+		return true
+	case copyValueKey:
+		p.copyValue()
+		return true
 	case 's', 'E':
 		p.exportValue()
+		return true
 	case 'l', 'L':
 		if !p.full {
 			return false
 		}
 		p.loadFull()
+		return true
 	default:
 		return false
 	}
+	if p == p.u.inspector && p.u.tableZoom {
+		p.u.inspectSelectedRecord()
+	}
+	action()
 	return true
 }
 

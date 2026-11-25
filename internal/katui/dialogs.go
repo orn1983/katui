@@ -338,7 +338,7 @@ func (u *ui) help() {
 		"Monitoring",
 		k("s") + " Sort  " + k("r") + " Refresh or retry monitoring  " + k("z") + " Zoom",
 		"Opened groups keep sampling at your configured interval while you browse or use a dialog. Switching clusters or quitting ends the session.",
-		"Open a group, then a partition to see its consumption chart. A blank column is a missing sample. A thin mark at the bottom is a measured zero.",
+		"Open a group, then a partition to see its consumption chart. A heavier segment of the bottom border marks a measured zero. A missing sample leaves the border unchanged.",
 		"Offset discontinuities shows how often the log end or committed offset moved backward.",
 		"Offsets are positions. Counts and rates based on offsets are estimates.",
 	}
@@ -360,7 +360,8 @@ func (u *ui) help() {
 			k("Alt+C")+" Start consuming, including while typing",
 			"",
 			"Messages and payloads",
-			k("i")+" Switch records/payload  "+k("b")+" Records  "+k("m")+" Format  "+k("z")+" Toggle Fullscreen",
+			k("i")+" Switch records/payload  "+k("b")+" Records  "+k("m")+" Format  "+k("z")+" Zoom focused pane",
+			"Zoom the records list to browse without loading previews. "+k("z")+" or "+k("Esc")+" restores the split. "+k("Enter")+" inspects the highlighted record.",
 			k("p")+" Pause or resume reader  "+k("x")+" Stop reader  ·  Clear buffer in Commands",
 			k("f")+" Toggle Follow (off by default). Entering Cursor or selecting inspector text pins the current record. Press "+k("f")+" to follow again.",
 			k("Space")+" Check or uncheck the row  "+k("a")+" Select all visible records  "+k("n")+" Unselect all",

@@ -440,7 +440,7 @@ func (u *ui) updateStatus() {
 	}
 	k := keyHint
 	bottom := k("?") + " Help & Commands  " + k("q") + " Quit"
-	if u.connectionPending() {
+	if u.connectionPending() && !(u.workspace == 2 && u.tableZoom) {
 		bottom = k("Esc") + " Cancel connection  ·  " + k("q") + " Quit"
 	}
 	summary = tview.Escape(safe(summary, true))
@@ -448,7 +448,11 @@ func (u *ui) updateStatus() {
 		summary = "Connection canceled  ·  " + k("r") + " Retry  ·  " + k("4") + " Clusters"
 	}
 	if u.tableZoom {
-		bottom = k("Esc") + " " + k("z") + " Restore  ·  " + bottom
+		if u.workspace == 2 {
+			bottom = k("z") + " Split view  " + k("i") + " Inspect  ·  " + bottom
+		} else {
+			bottom = k("Esc") + " " + k("z") + " Restore  ·  " + bottom
+		}
 	}
 	if u.message != "" {
 		bottom = tview.Escape(u.message) + "  ·  " + bottom

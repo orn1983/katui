@@ -10,7 +10,7 @@ import (
 
 func (u *ui) resetMessages() {
 	if u.inspector != nil {
-		u.inspector.setRecords(nil)
+		u.inspector.setRecord(nil)
 	}
 	old := append(append([]*storedRecord{}, u.records...), u.checked...)
 	old = append(old, u.pinned)
@@ -102,7 +102,7 @@ func (u *ui) pin(r *storedRecord) {
 	old := u.pinned
 	u.pinned = r
 	if u.inspector != nil {
-		u.inspector.setRecords([]*storedRecord{r})
+		u.inspector.setRecord(r)
 	}
 	u.release(old)
 }
@@ -175,7 +175,7 @@ func (u *ui) clearBuffer() {
 	u.recordBytes = 0
 	u.pinned = nil
 	if u.inspector != nil {
-		u.inspector.setRecords(nil)
+		u.inspector.setRecord(nil)
 	}
 	for _, r := range old {
 		u.release(r)
@@ -199,7 +199,7 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 			if pane.root.HasFocus() {
 				u.focus(u.table)
 			} else {
-				pane.focusViewer()
+				u.inspectSelectedRecord()
 			}
 		}
 	case 'm', 'd', 'h', 'o', 'u', 'y', copyValueKey, copyViewKey, 's', 'E':

@@ -48,6 +48,7 @@ func (p *payloadPane) copyText(text string) {
 		p.notice("No text selected. Use Shift+arrows or a mouse drag.")
 		return
 	}
+	p.u.clipboardRequest++
 	go p.sendClipboard(text)
 }
 
@@ -74,16 +75,23 @@ func (p *payloadPane) copyValue() {
 		return
 	}
 	records := append([]*storedRecord(nil), p.records...)
+	p.u.clipboardRequest++
+	request := p.u.clipboardRequest
 	release := p.u.holdPayloads(records)
 	p.notice("Reading raw value for clipboard…")
 	go func() {
 		text, err := completeValueText(p.u.ctx, records)
-		p.u.post(release)
-		if err != nil {
-			p.u.post(func() { p.notice(err.Error()) })
-			return
-		}
-		p.sendClipboard(text)
+		p.u.post(func() {
+			release()
+			if request != p.u.clipboardRequest {
+				return
+			}
+			if err != nil {
+				p.notice(err.Error())
+				return
+			}
+			go p.sendClipboard(text)
+		})
 	}()
 }
 
@@ -129,25 +137,39 @@ func (p *payloadPane) copyView() {
 		p.notice("Select a record first")
 		return
 	}
+	p.flushPreview()
+	p.u.clipboardRequest++
+	if p.previewHidden && !p.rendering {
+		p.startRender()
+	}
 	if p.rendering && !p.metadataTab {
+		if !p.full && !p.comparison {
+			p.renderJob.copyRequest = p.u.clipboardRequest
+			p.notice("Copying view when the selected payload is ready…")
+			return
+		}
 		p.notice("Payload is still being prepared")
 		return
 	}
-	if !p.metadataTab && p.result.incomplete {
+	if p.metadataTab {
+		go p.sendClipboard(p.viewer.doc.text)
+		return
+	}
+	p.copyRendered(p.result)
+}
+
+func (p *payloadPane) copyRendered(result payloadResult) {
+	if result.incomplete {
 		hint := "Rendered view is incomplete. Use Copy Raw Value or select the displayed text."
 		if !p.full {
-			hint = "Rendered view is incomplete. Press z for Fullscreen, use Copy Raw Value, or select the displayed text."
+			hint = "Rendered view is incomplete. Focus the payload and press z for Fullscreen, use Copy Raw Value, or select the displayed text."
 		} else if p.canLoadFull() {
 			hint = "Rendered view is incomplete. Press Alt+L to load more, use Copy Raw Value, or select the displayed text."
 		}
 		p.notice(hint)
 		return
 	}
-	text := p.result.text
-	if p.metadataTab {
-		text = p.viewer.doc.text
-	}
-	go p.sendClipboard(text)
+	go p.sendClipboard(result.text)
 }
 
 func (u *ui) holdPayloads(records []*storedRecord) func() {

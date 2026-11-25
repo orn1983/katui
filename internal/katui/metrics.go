@@ -221,19 +221,25 @@ func chart(values []ratePoint, width int) string {
 		out.WriteRune('│')
 		out.WriteString(strings.Repeat(" ", width-len(values)))
 		for _, v := range values {
-			switch {
-			case !v.known:
+			if !v.known {
 				out.WriteByte(' ')
-			case line == 0 && v.rate == 0:
-				out.WriteByte('_')
-			default:
-				steps := int(math.Ceil(max(0, v.rate)/ceiling*height*8)) - line*8
-				out.WriteRune(blocks[max(0, min(8, steps))])
+				continue
 			}
+			steps := int(math.Ceil(max(0, v.rate)/ceiling*height*8)) - line*8
+			out.WriteRune(blocks[max(0, min(8, steps))])
 		}
 		out.WriteString("│\n")
 	}
-	fmt.Fprintf(&out, "└%s┘\n", border)
+	out.WriteRune('└')
+	out.WriteString(strings.Repeat("─", width-len(values)))
+	for _, v := range values {
+		if v.known && v.rate == 0 {
+			out.WriteRune('━')
+		} else {
+			out.WriteRune('─')
+		}
+	}
+	out.WriteString("┘\n")
 	return out.String()
 }
 

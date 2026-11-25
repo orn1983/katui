@@ -9,6 +9,7 @@ import (
 )
 
 type dialog struct {
+	page         *modalPage
 	u            *ui
 	id           string
 	root         *tview.Flex
@@ -20,6 +21,18 @@ type dialog struct {
 	focusables   []tview.Primitive
 	cancel       func()
 	closed       bool
+}
+
+// Pages forwards unhandled mouse events to lower visible pages. A dialog owns
+// the whole layer, including empty space around its frame.
+type modalPage struct{ tview.Primitive }
+
+func (p *modalPage) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tview.Primitive)) (bool, tview.Primitive) {
+	handle := p.Primitive.MouseHandler()
+	return func(action tview.MouseAction, event *tcell.EventMouse, focus func(tview.Primitive)) (bool, tview.Primitive) {
+		_, capture := handle(action, event, focus)
+		return true, capture
+	}
 }
 
 type dialogAction struct {
@@ -60,7 +73,8 @@ func (u *ui) openDialog(title string, body, initial tview.Primitive, fullscreen 
 		page = tview.NewGrid().SetRows(top, 0, 1).SetColumns(2, 0, 2).
 			AddItem(d.root, 1, 1, 1, 1, 0, 0, true)
 	}
-	u.pages.AddPage(d.id, page, true, true)
+	d.page = &modalPage{page}
+	u.pages.AddPage(d.id, d.page, true, true)
 	u.app.SetFocus(initial)
 	return d
 }
@@ -70,6 +84,11 @@ func (d *dialog) close() {
 	}
 	d.closed = true
 	d.u.pages.RemovePage(d.id)
+	// tview retains the removed page in its backing array. Release the widget
+	// tree (and any record payloads its callbacks hold) after unmounting it.
+	if d.page != nil {
+		d.page.Primitive = nil
+	}
 	d.u.modalDepth--
 	if d.u.modalDepth == 0 {
 		d.u.refreshView()

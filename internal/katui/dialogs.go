@@ -348,6 +348,7 @@ func (u *ui) help() {
 			"Topics and administration",
 			k("h")+" Internal topics  "+k("g")+" Topic consumers",
 			k("n")+" Create topic  "+k("a")+" Manage  "+k("d")+" Delete topic",
+			"Topic settings ending in .ms accept milliseconds or durations such as 1h30m, 1.2d or 6.5w. The value helper shows exact milliseconds. Use m for minutes and mo for 30-day months.",
 			k("r")+" Review changes. Type the exact target name, then press "+k("Enter")+" to focus Apply and "+k("Enter")+" again to apply. "+k("Alt+A")+" also applies.",
 			"Review requires a Kafka cluster ID. Apply checks the cluster ID again before writing.",
 			"",

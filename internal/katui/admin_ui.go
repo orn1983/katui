@@ -43,7 +43,32 @@ func (u *ui) topicForm(topic, initial string) {
 	if u.width < 100 {
 		body.SetDirection(tview.FlexRow)
 	}
-	d = u.dialog(initial, body, form)
+	content := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(body, 0, 1, true)
+	durationHelp := tview.NewTextView().SetWordWrap(true)
+	updateDurationHelp := func() {
+		_, operation := op.GetCurrentOption()
+		k := strings.TrimSpace(key.GetText())
+		if operation == opDeleteTopic || !strings.HasSuffix(k, ".ms") {
+			content.RemoveItem(durationHelp)
+			return
+		}
+		if content.GetItemCount() == 1 {
+			content.AddItem(durationHelp, 3, 0, false)
+		}
+		input := strings.TrimSpace(value.GetText())
+		preview := "Enter a duration or a whole number of milliseconds."
+		if input != "" {
+			if raw, err := configValue(k, input); err != nil {
+				preview = err.Error()
+			} else {
+				preview = describeConfigValue(k, raw)
+			}
+		}
+		durationHelp.SetText("Units  ms s m h d w mo   ·   1mo = 30d   ·   e.g. 1.2d, 6.5w, 1h30m\n" + preview)
+	}
+	key.SetChangedFunc(func(string) { updateDurationHelp() })
+	value.SetChangedFunc(func(string) { updateDurationHelp() })
+	d = u.dialog(initial, content, form)
 	d.focusables = []tview.Primitive{form, search, table, stagedText}
 	settings := map[string]setting{}
 	staged := map[string]*string{}
@@ -54,7 +79,7 @@ func (u *ui) topicForm(topic, initial string) {
 			if staged[key] == nil {
 				fmt.Fprintf(&out, "%s → inherit broker default\n", key)
 			} else {
-				fmt.Fprintf(&out, "%s → %q\n", key, *staged[key])
+				fmt.Fprintf(&out, "%s → %s\n", key, describeConfigValue(key, *staged[key]))
 			}
 		}
 		if out.Len() == 0 {
@@ -71,7 +96,7 @@ func (u *ui) topicForm(topic, initial string) {
 		top, left := table.GetOffset()
 		visible = nil
 		table.Clear()
-		headers, widths := []string{"Setting", "Display", "Raw", "Source"}, []int{28, 16, 20, 20}
+		headers, widths := []string{"Setting", "Display", "Raw", "Source"}, []int{28, 18, 20, 20}
 		for i, heading := range headers {
 			table.SetCell(0, i, tableCell(heading, widths[i]).SetSelectable(false))
 		}
@@ -85,11 +110,10 @@ func (u *ui) topicForm(topic, initial string) {
 			} else if !s.available {
 				raw = "?"
 				display = "unavailable"
-			} else if n, err := strconv.ParseInt(s.value, 10, 64); err == nil {
-				switch {
-				case strings.HasSuffix(k, ".ms") && n >= 0:
-					display = integer(n/1000) + "s " + integer(n%1000) + "ms"
-				case strings.HasSuffix(k, ".bytes") && n >= 0:
+			} else if duration := humanConfigDuration(k, raw); duration != "" {
+				display = duration
+			} else if strings.HasSuffix(k, ".bytes") {
+				if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n >= 0 {
 					display = binarySize(&n)
 				}
 			}
@@ -125,7 +149,7 @@ func (u *ui) topicForm(topic, initial string) {
 		s := settings[k]
 		key.SetText(k)
 		if s.available {
-			value.SetText(s.value)
+			value.SetText(durationEditValue(k, s.value))
 		} else {
 			value.SetText("")
 		}
@@ -197,6 +221,7 @@ func (u *ui) topicForm(topic, initial string) {
 		edit := operation != opDeleteTopic
 		key.SetDisabled(!edit)
 		value.SetDisabled(!edit)
+		updateDurationHelp()
 		body.Clear().AddItem(form, 0, 1, true)
 		side.Clear()
 		if operation == opConfig {

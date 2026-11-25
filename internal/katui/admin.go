@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"math/big"
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -28,40 +26,6 @@ const (
 )
 
 var topicName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,249}$`)
-var durationPart = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h|d|w)`)
-
-func configValue(key, value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if !strings.HasSuffix(key, ".ms") {
-		return value, nil
-	}
-	if n, err := strconv.ParseInt(value, 10, 64); err == nil {
-		if n >= -1 {
-			return strconv.FormatInt(n, 10), nil
-		}
-		return "", errors.New("milliseconds must be at least -1")
-	}
-	if len(value) > 256 {
-		return "", errors.New("duration is too long")
-	}
-	units := map[string]int64{"ms": 1, "s": 1000, "m": 60000, "h": 3600000, "d": 86400000, "w": 604800000}
-	total := new(big.Rat)
-	input := value
-	for input != "" {
-		match := durationPart.FindStringSubmatch(input)
-		if match == nil {
-			return "", errors.New("use integer milliseconds or a duration such as 1h30m")
-		}
-		n, _ := new(big.Rat).SetString(match[1])
-		n.Mul(n, new(big.Rat).SetInt64(units[match[2]]))
-		total.Add(total, n)
-		input = input[len(match[0]):]
-	}
-	if value == "" || !total.IsInt() || !total.Num().IsInt64() {
-		return "", errors.New("duration must resolve to whole signed 64-bit milliseconds")
-	}
-	return total.Num().String(), nil
-}
 
 type setting struct {
 	value, source                  string
@@ -459,7 +423,7 @@ func (b *broker) prepareAdmin(ctx context.Context, in adminInput) (adminPlan, er
 			preview.WriteString("Settings use broker defaults.\n")
 		}
 		for _, key := range sortedKeys(p.settings) {
-			fmt.Fprintf(&preview, "%s = %q\n", key, *p.settings[key])
+			fmt.Fprintf(&preview, "%s = %s\n", key, describeConfigValue(key, *p.settings[key]))
 		}
 	case opConfig, opDeleteTopic:
 		identity, err := b.identity(ctx, p.target)
@@ -490,9 +454,9 @@ func (b *broker) prepareAdmin(ctx context.Context, in adminInput) (adminPlan, er
 			p.oldSettings[key] = old
 			target := "inherit broker default"
 			if p.settings[key] != nil {
-				target = strconv.Quote(*p.settings[key])
+				target = describeConfigValue(key, *p.settings[key])
 			}
-			fmt.Fprintf(&preview, "%s\n  %q (%s) → %s\n", key, old.value, old.source, target)
+			fmt.Fprintf(&preview, "%s\n  %s (%s) → %s\n", key, describeConfigValue(key, old.value), old.source, target)
 			if strings.HasPrefix(key, "retention.") || key == "cleanup.policy" {
 				preview.WriteString("  This change can remove retained records.\n")
 			}

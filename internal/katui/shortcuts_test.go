@@ -103,7 +103,7 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 	clusterKey(t, screen, tcell.KeyRune, 'v', 0)
 	clusterKey(t, screen, tcell.KeyRune, 'y', 0)
 	checkClipboard("1")
-	clusterKey(t, screen, tcell.KeyRune, 'y', tcell.ModAlt)
+	clusterKey(t, screen, tcell.KeyRune, 'g', 0)
 	checkClipboard(value)
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
 	wait("Esc did not return to Scroll mode", func() bool {
@@ -130,7 +130,13 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 	if rendered == value {
 		t.Fatal("formatted view should differ from the original value")
 	}
-	clusterKey(t, screen, tcell.KeyRune, 'v', tcell.ModAlt)
+	clusterKey(t, screen, tcell.KeyRune, 'y', 0)
+	checkClipboard(rendered)
+	clusterKey(t, screen, tcell.KeyRight, 0, tcell.ModShift)
+	wait("Shift+Right did not select part of the formatted view", func() bool {
+		return p.viewer.selectedText() != "" && p.viewer.selectedText() != rendered
+	})
+	clusterKey(t, screen, tcell.KeyRune, '.', 0)
 	checkClipboard(rendered)
 	path := filepath.Join(t.TempDir(), "saved-value.json")
 	clusterKey(t, screen, tcell.KeyRune, 's', 0)
@@ -181,14 +187,29 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 		return ok && focus != p.viewer && u.modalDepth == 1
 	})
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
-	wait("closing Fullscreen did not return to the inspector", func() bool { return p.viewer.HasFocus() && u.modalDepth == 0 })
-	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
-	wait("Help & Commands did not open", func() bool {
-		list, ok := u.app.GetFocus().(*tview.List)
-		return ok && u.modalDepth == 1 && list.GetItemCount() != 0
+	wait("closing Fullscreen did not return to the inspector", func() bool {
+		return p.viewer.HasFocus() && u.modalDepth == 0 && !p.rendering
 	})
-	clusterKey(t, screen, tcell.KeyRune, 'y', tcell.ModAlt)
+	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
+	wait("Help & Commands did not list both copy actions", func() bool {
+		list, ok := u.app.GetFocus().(*tview.List)
+		if !ok || u.modalDepth != 1 {
+			return false
+		}
+		var hasValue, hasView bool
+		for i := range list.GetItemCount() {
+			label, _ := list.GetItemText(i)
+			hasValue = hasValue || label == "Copy Value"
+			hasView = hasView || label == "Copy View"
+		}
+		return hasValue && hasView
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'g', 0)
 	checkClipboard(value)
+	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
+	wait("Help & Commands did not reopen", func() bool { return u.modalDepth == 1 })
+	clusterKey(t, screen, tcell.KeyRune, '.', 0)
+	checkClipboard(rendered)
 	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
 	wait("Help & Commands did not reopen", func() bool { return u.modalDepth == 1 })
 	clusterKey(t, screen, tcell.KeyRune, 'l', 0)

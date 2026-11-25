@@ -275,13 +275,13 @@ func (u *ui) help() {
 		k("p") + " Pause  " + k("x") + " Stop  " + k("f") + " Follow latest  ·  Clear buffer in Commands",
 		k("Space") + " Check  " + k("a") + " Check matching  " + k("w") + " Compare  " + k("e") + " Uncheck all",
 		k("o") + " CSV columns  " + k("u") + " Protobuf  " + k("d") + " Delimiter  " + k("Alt+H") + " Header",
-		k("Alt+Y") + " Copy Value  " + k("Alt+V") + " Copy View  " + k("s") + " Save value to file",
+		k(string(copyValueKey)) + " Copy Value  " + k(string(copyViewKey)) + " Copy View  " + k("s") + " Save value to file",
 		"In payload text, " + k("←/→") + " Pan 8 columns  " + k("↑/↓") + " Scroll 4 lines",
 		k("Alt+←/→") + " Pan 8 columns  " + k("Ctrl+←/→") + " Pan half the viewport  " + k("PgUp/PgDn") + " Page",
 		k("Space") + " Toggle Cursor  ·  In Cursor, " + k("Arrows") + " Move  " + k("v") + " Toggle Selection",
 		"In Selection, " + k("Arrows") + " Extend or shrink  " + k("Esc") + " Return to Cursor",
 		k("Shift+arrows") + " Extend selection  " + k("Ctrl+A") + " Select all  " + k("Ctrl+C") + " Copy selected text",
-		k("y") + " Yank the selection or the complete retained value",
+		k("y") + " Yank the selection or the rendered view",
 		"In the tree, " + k("←/→") + " Collapse or expand nodes",
 		k("/") + " Search payload in Fullscreen  " + k("n") + " Next  " + k("p") + " Previous  " + k("Alt+L") + " Load full",
 		"Confirm the larger load with " + k("Enter") + " or cancel with " + k("Esc"),
@@ -328,16 +328,8 @@ func (p *payloadPane) commands() {
 }
 
 func (d *dialog) addCopyCommands(list *tview.List, p *payloadPane) {
-	list.AddItem(buttonLabel("Copy Value", "Alt+Y"), "", 0, func() { d.close(); p.copyValue() })
-	list.AddItem(buttonLabel("Copy View", "Alt+V"), "", 0, func() { d.close(); p.copyView() })
-	d.keymap(func(e *tcell.EventKey) bool {
-		key := alt(e)
-		if key != 'y' && key != 'v' {
-			return false
-		}
-		d.close()
-		return p.altShortcut(key)
-	})
+	list.AddItem("Copy Value", "", copyValueKey, func() { d.close(); p.copyValue() })
+	list.AddItem("Copy View", "", copyViewKey, func() { d.close(); p.copyView() })
 }
 
 func (u *ui) theme() {

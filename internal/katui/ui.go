@@ -544,7 +544,7 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	}
 	key := shortcutRune(ev)
 	if key == 0 {
-		if u.workspace == 2 && u.inspector != nil && u.inspector.altShortcut(alt(ev)) {
+		if u.workspace == 2 && alt(ev) == 'h' && u.inspector != nil && u.inspector.shortcut('h') {
 			return nil
 		}
 		return ev

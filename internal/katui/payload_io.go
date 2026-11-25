@@ -125,6 +125,10 @@ func completeValueText(ctx context.Context, records []*storedRecord) (string, er
 }
 
 func (p *payloadPane) copyView() {
+	if len(p.records) == 0 {
+		p.notice("Select a record first")
+		return
+	}
 	if p.rendering && !p.metadataTab {
 		p.notice("Payload is still being prepared")
 		return

@@ -9,6 +9,11 @@ import (
 const shortcutForeground = "#ffe29a"
 const shortcutBackground = "#3c321c"
 
+const (
+	copyValueKey = 'g'
+	copyViewKey  = '.'
+)
+
 func keyHint(key string) string {
 	return "[" + shortcutForeground + ":" + shortcutBackground + ":b]" + tview.Escape(key) + "[-:-:-]"
 }

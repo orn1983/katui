@@ -197,7 +197,7 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 				pane.focusViewer()
 			}
 		}
-	case 'm', 'd', 'h', 'o', 'u', 'y', 's', 'E':
+	case 'm', 'd', 'h', 'o', 'u', 'y', copyValueKey, copyViewKey, 's', 'E':
 		if pane != nil && pane.shortcut(ev.Rune()) {
 			return nil
 		}
@@ -358,7 +358,7 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 		if isEditing(u.app.GetFocus()) {
 			return false
 		}
-		if p.altShortcut(alt(ev)) {
+		if alt(ev) == 'h' && p.shortcut('h') {
 			return true
 		}
 		key := shortcutRune(ev)

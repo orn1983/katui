@@ -724,7 +724,11 @@ func (p *payloadPane) shortcut(key rune) bool {
 				return true
 			}
 		}
+		p.copyView()
+	case copyValueKey:
 		p.copyValue()
+	case copyViewKey:
+		p.copyView()
 	case 's', 'E':
 		p.exportValue()
 	case 'l', 'L':
@@ -732,20 +736,6 @@ func (p *payloadPane) shortcut(key rune) bool {
 			return false
 		}
 		p.loadFull()
-	default:
-		return false
-	}
-	return true
-}
-
-func (p *payloadPane) altShortcut(key rune) bool {
-	switch key {
-	case 'h':
-		return p.shortcut('h')
-	case 'y':
-		p.copyValue()
-	case 'v':
-		p.copyView()
 	default:
 		return false
 	}

@@ -426,7 +426,7 @@ func (u *ui) updateStatus() {
 		}
 	}
 	k := keyHint
-	bottom := k("?") + " Help  " + k(":") + " Commands  " + k("q") + " Quit"
+	bottom := k("?") + " Help & Commands  " + k("q") + " Quit"
 	if u.connectionPending() {
 		bottom = k("Esc") + " Cancel connection  ·  " + k("q") + " Quit"
 	}

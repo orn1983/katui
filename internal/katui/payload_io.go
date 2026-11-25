@@ -51,14 +51,6 @@ func (p *payloadPane) copyText(text string) {
 	go p.sendClipboard(text)
 }
 
-func (p *payloadPane) copyMenu() {
-	list := p.u.newList().ShowSecondaryText(false)
-	d := p.u.dialog("Copy payload", list, list)
-	list.AddItem("Copy Value", "", 0, func() { d.close(); p.copyValue() })
-	list.AddItem("Copy View", "", 0, func() { d.close(); p.copyView() })
-	d.hint(keyHint("Enter") + " Copy  " + keyHint("Esc") + " Back")
-}
-
 func (p *payloadPane) sendClipboard(text string) {
 	local := ""
 	if runtime.GOOS == "darwin" && os.Getenv("SSH_CONNECTION") == "" && os.Getenv("SSH_CLIENT") == "" && os.Getenv("SSH_TTY") == "" {

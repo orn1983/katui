@@ -254,7 +254,7 @@ func (u *ui) help() {
 		"In tables, " + k("←/→") + " Scroll sideways  " + k("Ctrl+←/→") + " Scroll farther",
 		k("Enter") + " Open selection  " + k("Esc") + " Back or cancel",
 		k("/") + " Search  " + k("s") + " Sort  " + k("r") + " Refresh  " + k("z") + " Toggle fullscreen",
-		k(":") + " or " + k("Ctrl+P") + " Commands  " + k("?") + " Help  " + k("q") + " Quit",
+		k("?") + " or " + k("Ctrl+P") + " Help & Commands  " + k("q") + " Quit",
 		"Use the shown lowercase letters on lists, viewers, and buttons.",
 		"While typing, use Alt with the shown action letter or Tab to reach a button.",
 		"",
@@ -274,15 +274,16 @@ func (u *ui) help() {
 		k("i") + " Switch records/payload  " + k("b") + " Records  " + k("m") + " Format  " + k("z") + " Toggle Fullscreen",
 		k("p") + " Pause  " + k("x") + " Stop  " + k("f") + " Follow latest  ·  Clear buffer in Commands",
 		k("Space") + " Check  " + k("a") + " Check matching  " + k("w") + " Compare  " + k("e") + " Uncheck all",
-		k("o") + " CSV columns  " + k("u") + " Protobuf  " + k("d") + " Delimiter  " + k("h") + " Header",
-		k(":") + " Copy Value or Copy View  " + k("s") + " Save value to file",
+		k("o") + " CSV columns  " + k("u") + " Protobuf  " + k("d") + " Delimiter  " + k("Alt+H") + " Header",
+		k("Alt+Y") + " Copy Value  " + k("Alt+V") + " Copy View  " + k("s") + " Save value to file",
 		"In payload text, " + k("←/→") + " Pan 8 columns  " + k("↑/↓") + " Scroll 4 lines",
 		k("Alt+←/→") + " Pan 8 columns  " + k("Ctrl+←/→") + " Pan half the viewport  " + k("PgUp/PgDn") + " Page",
 		k("Space") + " Toggle Cursor  ·  In Cursor, " + k("Arrows") + " Move  " + k("v") + " Toggle Selection",
 		"In Selection, " + k("Arrows") + " Extend or shrink  " + k("Esc") + " Return to Cursor",
-		k("Shift+arrows") + " Extend selection  " + k("Ctrl+A") + " Select all  " + k("y") + " / " + k("Ctrl+C") + " Copy selected text",
+		k("Shift+arrows") + " Extend selection  " + k("Ctrl+A") + " Select all  " + k("Ctrl+C") + " Copy selected text",
+		k("y") + " Yank the selection or the complete retained value",
 		"In the tree, " + k("←/→") + " Collapse or expand nodes",
-		k("/") + " Search payload in Fullscreen  " + k("n") + " Next  " + k("p") + " Previous  " + k("l") + " Load full",
+		k("/") + " Search payload in Fullscreen  " + k("n") + " Next  " + k("p") + " Previous  " + k("Alt+L") + " Load full",
 		"Confirm the larger load with " + k("Enter") + " or cancel with " + k("Esc"),
 		"",
 		"Files and editors",
@@ -299,7 +300,7 @@ func (u *ui) help() {
 }
 func (u *ui) palette() {
 	list := u.newList().ShowSecondaryText(false)
-	d := u.dialog("Commands", list, list)
+	d := u.dialog("Help & Commands", list, list)
 	d.hint(keyHint("Enter") + " Run selected command  " + keyHint("Esc") + " Back")
 	add := func(label string, key rune, fn func()) { list.AddItem(label, "", key, func() { d.close(); fn() }) }
 	add("Topics", '1', func() { u.changeWorkspace(0) })
@@ -311,13 +312,34 @@ func (u *ui) palette() {
 		add("Clear message buffer", 'l', u.clearBuffer)
 	}
 	if u.workspace == 2 && u.inspector != nil && u.pinned != nil {
-		add("Copy Value", 0, u.inspector.copyValue)
-		add("Copy View", 0, u.inspector.copyView)
+		d.addCopyCommands(list, u.inspector)
 	}
 	add("Change color theme", 't', u.theme)
-	add("Help", '?', u.help)
+	add("Keyboard shortcuts", '?', u.help)
 	add("Quit", 'q', u.quit)
 }
+
+func (p *payloadPane) commands() {
+	list := p.u.newList().ShowSecondaryText(false)
+	d := p.u.dialog("Payload Help & Commands", list, list)
+	d.addCopyCommands(list, p)
+	list.AddItem("Keyboard shortcuts", "", '?', func() { d.close(); p.u.help() })
+	d.hint(keyHint("Enter") + " Run selected command  " + keyHint("Esc") + " Back")
+}
+
+func (d *dialog) addCopyCommands(list *tview.List, p *payloadPane) {
+	list.AddItem(buttonLabel("Copy Value", "Alt+Y"), "", 0, func() { d.close(); p.copyValue() })
+	list.AddItem(buttonLabel("Copy View", "Alt+V"), "", 0, func() { d.close(); p.copyView() })
+	d.keymap(func(e *tcell.EventKey) bool {
+		key := alt(e)
+		if key != 'y' && key != 'v' {
+			return false
+		}
+		d.close()
+		return p.altShortcut(key)
+	})
+}
+
 func (u *ui) theme() {
 	list := u.newList().ShowSecondaryText(false)
 	d := u.dialog("Color theme", list, list)

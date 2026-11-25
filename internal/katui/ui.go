@@ -461,6 +461,15 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.applyUpdates()
 		return nil
 	}
+	if key := shortcutRune(ev); key == 'h' || key == 'l' {
+		switch u.app.GetFocus().(type) {
+		case *payloadText, *tview.TreeView:
+			if key == 'h' {
+				return tcell.NewEventKey(tcell.KeyLeft, 0, ev.Modifiers())
+			}
+			return tcell.NewEventKey(tcell.KeyRight, 0, ev.Modifiers())
+		}
+	}
 	if ev.Key() == tcell.KeyCtrlC {
 		if _, ok := u.app.GetFocus().(*payloadText); ok {
 			return tcell.NewEventKey(ev.Key(), ev.Rune(), ev.Modifiers())
@@ -512,9 +521,6 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 				u.changeWorkspace(int(key - '1'))
 				return nil
 			case '?':
-				u.help()
-				return nil
-			case ':':
 				u.palette()
 				return nil
 			}
@@ -538,6 +544,9 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	}
 	key := shortcutRune(ev)
 	if key == 0 {
+		if u.workspace == 2 && u.inspector != nil && u.inspector.altShortcut(alt(ev)) {
+			return nil
+		}
 		return ev
 	}
 	row := u.selected()
@@ -565,12 +574,10 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.focus(u.search)
 	case '4':
 		u.showClusters()
-	case ':':
-		u.palette()
 	case 'q':
 		u.quit()
 	case '?':
-		u.help()
+		u.palette()
 	case 'z':
 		if u.workspace == 2 {
 			u.fullscreenRecord()

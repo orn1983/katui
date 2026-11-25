@@ -197,7 +197,7 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 				pane.focusViewer()
 			}
 		}
-	case 'm', 'd', 'h', 'o', 'u', 's', 'E':
+	case 'm', 'd', 'h', 'o', 'u', 'y', 's', 'E':
 		if pane != nil && pane.shortcut(ev.Rune()) {
 			return nil
 		}
@@ -319,7 +319,7 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 			p.loadCanceled = true
 			p.updateLoadButton()
 			p.status.SetText("Loading canceled")
-			d.hint(keyHint("l") + " Load again  " + keyHint("z") + " Exit Fullscreen")
+			d.hint(keyHint("Alt+L") + " Load again  " + keyHint("z") + " Exit Fullscreen")
 			return
 		}
 		if full && p.search.HasFocus() {
@@ -340,7 +340,7 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 		d.button("Metadata", "2", func() { p.showMetadata(true) })
 		d.button("Fullscreen", "z", func() { u.payloadDialog(true, records, p.modeName) })
 	}
-	d.button("Copy", ":", p.copyMenu)
+	d.button("Commands", "?", p.commands)
 	d.button("Save", "s", p.exportValue)
 	if full {
 		d.button("Exit Fullscreen", "z", close)
@@ -351,8 +351,15 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 		if p.confirmLoad != nil {
 			return ev.Key() != tcell.KeyEnter && ev.Key() != tcell.KeyTab && ev.Key() != tcell.KeyBacktab
 		}
+		if ev.Key() == tcell.KeyCtrlP {
+			p.commands()
+			return true
+		}
 		if isEditing(u.app.GetFocus()) {
 			return false
+		}
+		if p.altShortcut(alt(ev)) {
+			return true
 		}
 		key := shortcutRune(ev)
 		switch key {

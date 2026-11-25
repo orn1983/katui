@@ -270,6 +270,10 @@ func (v *payloadText) offsetAt(row, column int) int {
 	return start + v.doc.position(row, v.doc.text[start:end], v.left+column, true).byteOffset
 }
 
+func (v *payloadText) selectedText() string {
+	return v.doc.text[min(v.anchor, v.cursor):max(v.anchor, v.cursor)]
+}
+
 func (v *payloadText) Draw(screen tcell.Screen) {
 	v.Box.DrawForSubclass(screen, v)
 	x, y, w, h := v.GetInnerRect()
@@ -329,9 +333,8 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 			return
 		}
 		switch {
-		case key == tcell.KeyCtrlC || letter == 'y':
-			lo, hi := min(v.anchor, v.cursor), max(v.anchor, v.cursor)
-			v.copy(v.doc.text[lo:hi])
+		case key == tcell.KeyCtrlC:
+			v.copy(v.selectedText())
 			return
 		case key == tcell.KeyCtrlA:
 			v.anchor, v.cursor = 0, len(v.doc.text)

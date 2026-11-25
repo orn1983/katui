@@ -333,6 +333,10 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 		t.Fatalf("%s: expanded=%t, rendering=%t, modals=%d, status=%q, warning=%q", message, expanded, rendering, depth, status, warning)
 	}
 	waitFor("default render did not reach the size warning", func() bool { return !p.rendering && p.result.canExpand })
+	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
+	waitFor("l did not pan right in Fullscreen", func() bool { return p.viewer.left == 8 && p.confirmLoad == nil })
+	clusterKey(t, screen, tcell.KeyRune, 'h', 0)
+	waitFor("h did not pan left in Fullscreen", func() bool { return p.viewer.left == 0 })
 	u.post(func() {
 		if !p.viewer.HasFocus() {
 			t.Error("Full view did not open on the payload text")
@@ -351,9 +355,9 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 			t.Error("Esc did not cancel just the loading operation")
 		}
 	})
-	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
+	clusterKey(t, screen, tcell.KeyRune, 'l', tcell.ModAlt)
 	waitFor("retry did not restore the original preview", func() bool { return !p.rendering && p.canLoadFull() })
-	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
+	clusterKey(t, screen, tcell.KeyRune, 'l', tcell.ModAlt)
 	waitFor("load confirmation was not shown inline", func() bool {
 		return !p.expanded && !p.rendering && p.confirmLoad != nil && u.modalDepth == 1 && p.viewer.doc.text != ""
 	})
@@ -361,7 +365,7 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	waitFor("Esc did not restore the payload after canceling the prompt", func() bool {
 		return p.confirmLoad == nil && !p.expanded && p.viewer.HasFocus() && u.modalDepth == 1 && p.viewer.doc.text != ""
 	})
-	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
+	clusterKey(t, screen, tcell.KeyRune, 'l', tcell.ModAlt)
 	waitFor("load confirmation did not reopen", func() bool { return p.confirmLoad != nil })
 	clusterKey(t, screen, tcell.KeyEnter, 0, 0)
 	waitFor("confirmed full render was truncated", func() bool { return p.expanded && !p.rendering && !p.result.incomplete })

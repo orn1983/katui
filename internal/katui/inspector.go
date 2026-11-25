@@ -59,7 +59,7 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	p.updateNavigation()
 	p.mode = tview.NewButton("").SetSelectedFunc(p.chooseFormat)
 	p.delimButton = tview.NewButton(buttonLabel("Delimiter", "d")).SetSelectedFunc(p.delimiterDialog)
-	p.headerButton = tview.NewButton(buttonLabel("Header", "h")).SetSelectedFunc(p.toggleHeader)
+	p.headerButton = tview.NewButton(buttonLabel("Header", "Alt+H")).SetSelectedFunc(p.toggleHeader)
 	p.profileButton = tview.NewButton(buttonLabel("Columns", "o")).SetSelectedFunc(func() { p.editProfile(csvMode(p.modeName)) })
 	p.search = tview.NewInputField().SetLabel(buttonLabel("Find", "/") + "  ")
 	p.search.SetChangedFunc(func(string) { p.scheduleSearch() })
@@ -146,7 +146,7 @@ func (p *payloadPane) rebuild() {
 	p.bar.Clear()
 	p.bar.AddItem(p.mode, 0, 1, false)
 	if csvMode(p.modeName) {
-		p.bar.AddItem(p.delimButton, 13, 0, false).AddItem(p.headerButton, 10, 0, false)
+		p.bar.AddItem(p.delimButton, 13, 0, false).AddItem(p.headerButton, 14, 0, false)
 		p.profileButton.SetLabel(buttonLabel("Columns", "o"))
 		p.bar.AddItem(p.profileButton, 11, 0, false)
 	} else if protoMode(p.modeName) {
@@ -382,11 +382,11 @@ func (p *payloadPane) refresh() {
 			p.updateLoadButton()
 			notice := tview.Escape(safe(strings.ReplaceAll(result.warning, "\n", " · "), false))
 			if p.canLoadFull() {
-				notice = keyHint("l") + " Load full · " + notice
+				notice = keyHint("Alt+L") + " Load full · " + notice
 			}
 			if notice == "" && p.dialog == nil {
 				k := keyHint
-				notice = k(":") + " Copy actions · " + k("s") + " Save · " + k("z") + " Fullscreen"
+				notice = k("?") + " Copy actions · " + k("s") + " Save · " + k("z") + " Fullscreen"
 			}
 			p.status.SetText(notice)
 			if p.dialog != nil && result.warning != "" {
@@ -525,7 +525,7 @@ func (p *payloadPane) updateLoadButton() {
 	if p.loadCanceled {
 		label = "Retry"
 	}
-	p.loadButton.SetLabel(buttonLabel(label, "l"))
+	p.loadButton.SetLabel(buttonLabel(label, "Alt+L"))
 	p.loadButton.SetDisabled(!show)
 	d.footer.Clear()
 	for _, button := range d.buttons {
@@ -717,6 +717,14 @@ func (p *payloadPane) shortcut(key rune) bool {
 			return false
 		}
 		p.editProfile(false)
+	case 'y':
+		for _, view := range []*payloadText{p.viewer, p.nodeView} {
+			if view.HasFocus() && view.anchor != view.cursor {
+				view.copy(view.selectedText())
+				return true
+			}
+		}
+		p.copyValue()
 	case 's', 'E':
 		p.exportValue()
 	case 'l', 'L':
@@ -729,6 +737,21 @@ func (p *payloadPane) shortcut(key rune) bool {
 	}
 	return true
 }
+
+func (p *payloadPane) altShortcut(key rune) bool {
+	switch key {
+	case 'h':
+		return p.shortcut('h')
+	case 'y':
+		p.copyValue()
+	case 'v':
+		p.copyView()
+	default:
+		return false
+	}
+	return true
+}
+
 func (p *payloadPane) chooseTopic(action func(string)) {
 	choices := p.topics()
 	if len(choices) == 0 {

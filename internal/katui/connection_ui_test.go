@@ -16,6 +16,13 @@ import (
 
 func startClusterUI(t *testing.T, profiles map[string]connectionProfile, args ...string) (*ui, tcell.SimulationScreen, <-chan struct{}) {
 	t.Helper()
+	screen := tcell.NewSimulationScreen("UTF-8")
+	u, done := startClusterUIWithScreen(t, profiles, screen, args...)
+	return u, screen, done
+}
+
+func startClusterUIWithScreen(t *testing.T, profiles map[string]connectionProfile, screen tcell.Screen, args ...string) (*ui, <-chan struct{}) {
+	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	if err := saveConnectionProfiles("api", profiles); err != nil {
 		t.Fatal(err)
@@ -33,7 +40,6 @@ func startClusterUI(t *testing.T, profiles map[string]connectionProfile, args ..
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	u := newUI(ctx, b)
-	screen := tcell.NewSimulationScreen("UTF-8")
 	u.app.SetScreen(screen)
 	done := make(chan struct{})
 	var runErr error
@@ -55,7 +61,7 @@ func startClusterUI(t *testing.T, profiles map[string]connectionProfile, args ..
 			t.Error("cluster UI did not stop")
 		}
 	})
-	return u, screen, done
+	return u, done
 }
 
 func clusterKey(t *testing.T, screen tcell.Screen, key tcell.Key, char rune, modifiers tcell.ModMask) {

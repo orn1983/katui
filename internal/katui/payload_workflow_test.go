@@ -278,6 +278,25 @@ type clipboardScreen struct {
 
 func (s clipboardScreen) SetClipboard(data []byte) { s.copied <- string(data) }
 
+func TestFullViewSearchClearsObsoleteMatch(t *testing.T) {
+	u, _, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	record := retainedRecord(t, nil, []byte("first payload"))
+	var p *payloadPane
+	u.post(func() {
+		p = u.payloadDialog(true, []*storedRecord{record}, "raw")
+		p.search.SetText("payload")
+	})
+	waitKeyboardState(t, u, "search did not highlight the match", func() bool { return p.viewer.match == [2]int{6, 13} })
+	u.post(func() { p.search.SetText("missing") })
+	waitKeyboardState(t, u, "unmatched query kept the obsolete highlight", func() bool {
+		return p.status.GetText(true) == "No matches" && p.viewer.match == [2]int{}
+	})
+	u.post(func() { p.search.SetText("") })
+	waitKeyboardState(t, u, "clearing search kept a stale match status", func() bool {
+		return !strings.Contains(strings.ToLower(p.status.GetText(true)), "match")
+	})
+}
+
 func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
@@ -378,16 +397,6 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	waitFor("search did not jump past the old display boundary", func() bool {
 		return p.viewer.match[0] > maxRenderedPayload && p.viewer.left > maxRenderedPayload
 	})
-	u.post(func() { p.search.SetText("absent-from-payload") })
-	waitFor("an unmatched query kept the old highlight", func() bool {
-		return p.status.GetText(true) == "No matches" && p.viewer.match == [2]int{}
-	})
-	u.post(func() { p.search.SetText("") })
-	waitFor("clearing search kept a stale match status", func() bool {
-		return !strings.Contains(strings.ToLower(p.status.GetText(true)), "match")
-	})
-	u.post(func() { p.search.SetText(marker) })
-	waitFor("search did not restore the highlight", func() bool { return p.viewer.match[1] > maxRenderedPayload })
 	u.post(func() {
 		p.focusViewer()
 		p.viewer.selectBy(p.viewer.match[0], false)

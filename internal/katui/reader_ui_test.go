@@ -192,6 +192,56 @@ func TestInspectorSelectionKeepsOriginalRecord(t *testing.T) {
 	}
 }
 
+func TestReaderBuffersBehindModalAndRestoresInspectorFocus(t *testing.T) {
+	u, screen, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	first := retainedRecord(t, nil, []byte(`{"first":1}`))
+	next := retainedRecord(t, nil, []byte(`{"next":2}`))
+	next.id.offset = 1
+	u.post(func() {
+		u.changeWorkspace(2)
+		u.sessionProfiles[first.id.Topic] = profile{Mode: "tree"}
+		u.buffer(first)
+		u.refreshView()
+	})
+	waitKeyboardState(t, u, "first tree not rendered", func() bool { return u.inspector.showingTree() })
+	u.post(func() {
+		u.followLatest = true
+		u.inspector.focusViewer()
+		u.palette()
+		u.buffer(next)
+		u.readerViewDirty.Store(true)
+	})
+	waitKeyboardState(t, u, "background reader redrew the hidden inspector", func() bool {
+		return u.modalDepth == 1 && !u.readerViewDirty.Load() && u.pinned == first && len(u.records) == 2
+	})
+	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
+	waitKeyboardState(t, u, "closing Help did not focus the latest record's tree", func() bool {
+		return u.modalDepth == 0 && u.pinned == next && u.inspector.showingTree() && u.inspector.tree.HasFocus()
+	})
+}
+
+func TestNestedPayloadDialogRestoresCurrentFormat(t *testing.T) {
+	u, screen, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	record := retainedRecord(t, nil, []byte(`{"first":1}`))
+	var full *payloadPane
+	u.post(func() {
+		full = u.payloadDialog(true, []*storedRecord{record}, "tree")
+	})
+	waitKeyboardState(t, u, "fullscreen tree did not render", func() bool { return full.showingTree() })
+	u.post(func() {
+		u.app.SetFocus(full.nodeView)
+		full.commands()
+		full.changeMode("raw")
+	})
+	waitKeyboardState(t, u, "new format did not render behind Commands", func() bool {
+		return u.modalDepth == 2 && !full.rendering && full.viewer.doc.text != ""
+	})
+	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
+	waitKeyboardState(t, u, "focus returned to discarded tree-node text", func() bool {
+		return u.modalDepth == 1 && full.viewer.HasFocus()
+	})
+}
+
 func TestClearingInspectorDiscardsTreeAndRestoresFocus(t *testing.T) {
 	u, _, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
 	record := retainedRecord(t, nil, []byte(`{"order":{"id":42}}`))

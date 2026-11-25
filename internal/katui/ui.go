@@ -100,7 +100,7 @@ type ui struct {
 	recordBytes                    int
 	evictions                      int
 	checked                        []*storedRecord
-	modalRecords                   []*storedRecord
+	modalPayloads                  []*payloadPane
 	payloadJobs                    map[*storedRecord]int
 	checkedBytes                   int
 	pinned                         *storedRecord
@@ -280,14 +280,17 @@ func (u *ui) applyUpdates() {
 		update := <-u.updates
 		update()
 	}
+	// The last dialog to close refreshes Messages from the current buffer.
+	if u.modalDepth > 0 {
+		u.readerViewDirty.Store(false)
+		return
+	}
 	if u.workspace == 2 && u.readerViewDirty.Load() &&
 		(u.readerState.state == "COMPLETE" || u.readerState.state == "ERROR" || !time.Now().Before(u.nextReaderRefresh)) {
 		u.refreshView()
 	}
 	u.poll()
-	if u.modalDepth == 0 {
-		u.updateStatus()
-	}
+	u.updateStatus()
 }
 func (u *ui) say(message string) {
 	u.message = safe(message, false)

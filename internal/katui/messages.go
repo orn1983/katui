@@ -2,6 +2,7 @@ package katui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -29,11 +30,12 @@ func (u *ui) release(record *storedRecord) {
 	if record == nil || record.fullPath == "" || u.pinned == record || u.payloadJobs[record] > 0 {
 		return
 	}
-	for _, set := range [][]*storedRecord{u.records, u.checked, u.modalRecords} {
-		for _, r := range set {
-			if r == record {
-				return
-			}
+	if slices.Contains(u.records, record) || slices.Contains(u.checked, record) {
+		return
+	}
+	for _, pane := range u.modalPayloads {
+		if slices.Contains(pane.records, record) {
+			return
 		}
 	}
 	record.discardPayload()
@@ -86,7 +88,7 @@ func (u *ui) toggleCheck(r *storedRecord) {
 	if i >= 0 {
 		was := u.checked[i]
 		u.checkedBytes -= was.cost
-		u.checked = append(u.checked[:i], u.checked[i+1:]...)
+		u.checked = slices.Delete(u.checked, i, i+1)
 		u.release(was)
 	} else if !u.addCheck(r) {
 		u.say(fmt.Sprintf("Checked limit reached (%d/100, %s of 8 MiB)", len(u.checked), binarySize(ptr(int64(u.checkedBytes)))))
@@ -283,8 +285,6 @@ func (u *ui) comparison() {
 	u.payloadDialog(false, records, textMode(u.profile(records[0].id.Topic).Mode))
 }
 func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *payloadPane {
-	length := len(u.modalRecords)
-	u.modalRecords = append(u.modalRecords, records...)
 	p := u.newPayloadPane(full, !full, records)
 	p.modeName = mode
 	p.rebuild()
@@ -294,10 +294,11 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 	}
 	d := u.openDialog(title, p.root, p.content, full)
 	p.dialog = d
+	u.modalPayloads = append(u.modalPayloads, p)
 	d.focusables = p.focusables()
 	close := func() {
 		p.cancelRender()
-		u.modalRecords = u.modalRecords[:length]
+		u.modalPayloads = slices.Delete(u.modalPayloads, len(u.modalPayloads)-1, len(u.modalPayloads))
 		for _, r := range records {
 			u.release(r)
 		}

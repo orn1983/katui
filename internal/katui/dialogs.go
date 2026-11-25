@@ -9,17 +9,17 @@ import (
 )
 
 type dialog struct {
-	u          *ui
-	id         string
-	root       *tview.Flex
-	status     *tview.TextView
-	footer     *tview.Flex
-	previous   tview.Primitive
-	buttons    []*tview.Button
-	actions    map[rune]dialogAction
-	focusables []tview.Primitive
-	cancel     func()
-	closed     bool
+	u            *ui
+	id           string
+	root         *tview.Flex
+	status       *tview.TextView
+	footer       *tview.Flex
+	restoreFocus func()
+	buttons      []*tview.Button
+	actions      map[rune]dialogAction
+	focusables   []tview.Primitive
+	cancel       func()
+	closed       bool
 }
 
 type dialogAction struct {
@@ -50,7 +50,7 @@ func (u *ui) openDialog(title string, body, initial tview.Primitive, fullscreen 
 		u.invalidateMonitor()
 	}
 	d := u.newDialog(title, body)
-	d.id, d.previous = fmt.Sprintf("modal-%d", u.modalID), u.app.GetFocus()
+	d.id, d.restoreFocus = fmt.Sprintf("modal-%d", u.modalID), u.dialogReturnFocus()
 	var page tview.Primitive = d.root
 	if !fullscreen {
 		top := 1
@@ -75,11 +75,35 @@ func (d *dialog) close() {
 		d.u.refreshView()
 		d.u.poll()
 	}
-	if d.previous != nil {
-		d.u.app.SetFocus(d.previous)
-	} else {
-		d.u.focus(d.u.mainPane())
+	d.restoreFocus()
+}
+
+// A record or format may change while a dialog is open. Restore the logical
+// payload pane so input never goes to a tree that has since been discarded.
+func (u *ui) dialogReturnFocus() func() {
+	focus := u.app.GetFocus()
+	p := u.inspector
+	if len(u.modalPayloads) > 0 {
+		p = u.modalPayloads[len(u.modalPayloads)-1]
 	}
+	if p != nil {
+		switch focus {
+		case p.viewer, p.tree:
+			return p.focusViewer
+		case p.nodeView:
+			return func() {
+				if p.showingTree() {
+					u.app.SetFocus(p.nodeView)
+				} else {
+					p.focusViewer()
+				}
+			}
+		}
+	}
+	if focus == nil {
+		return func() { u.focus(u.mainPane()) }
+	}
+	return func() { u.app.SetFocus(focus) }
 }
 func (d *dialog) say(text string) {
 	d.hint(tview.Escape(safe(text, true)))

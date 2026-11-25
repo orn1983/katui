@@ -177,12 +177,15 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 	}
 	clusterKey(t, screen, tcell.KeyRune, 'z', 0)
 	wait("z did not open Fullscreen at the terminal size", func() bool {
-		_, front := u.pages.GetFrontPage()
-		root, ok := front.(*tview.Flex)
-		if !ok || u.modalDepth != 1 || strings.TrimSpace(root.GetTitle()) != "Fullscreen" {
+		if len(u.modalPayloads) != 1 || u.modalDepth != 1 {
 			return false
 		}
-		x, y, width, height := root.GetRect()
+		dialog := u.modalPayloads[0].dialog
+		front, _ := u.pages.GetFrontPage()
+		if front != dialog.id || strings.TrimSpace(dialog.root.GetTitle()) != "Fullscreen" {
+			return false
+		}
+		x, y, width, height := dialog.root.GetRect()
 		w, h := screen.Size()
 		return x == 0 && y == 0 && width == w && height == h
 	})

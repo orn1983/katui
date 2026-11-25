@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,4 +127,45 @@ func TestKafkaFiniteReaderIntegration(t *testing.T) {
 		}
 	}
 	t.Fatal("second partition record was unavailable")
+}
+
+func TestExactReaderOffsetIsInclusiveAndValidatesBounds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	b, _, producer := migrationBroker(t)
+	seedMigrationOffsets(t, ctx, b, producer)
+	store := newPayloadStore(t.TempDir(), payloadQuota)
+	defer store.close()
+	read := func(offset int64) (readerUpdate, []recordID) {
+		var last readerUpdate
+		var records []recordID
+		opts := consumeOptions{start: startOffset, offset: offset, partitions: []int32{0, 1}}
+		b.readRecords(ctx, &readerSession{wake: make(chan struct{}, 1)}, migrationTopic, opts, store, func(update readerUpdate) {
+			last = update
+			for _, r := range update.records {
+				records = append(records, r.id)
+			}
+		})
+		return last, records
+	}
+	last, records := read(1)
+	want := []recordID{{partKey{migrationTopic, 0}, 1}, {partKey{migrationTopic, 1}, 1}}
+	if last.state != "COMPLETE" || !reflect.DeepEqual(records, want) {
+		t.Fatalf("exact reader state=%+v, records=%v, want %v", last, records, want)
+	}
+	if last, records := read(2); last.state != "COMPLETE" || len(records) != 0 {
+		t.Fatalf("end is a valid empty snapshot: state=%+v, records=%v", last, records)
+	}
+	var offsets kadm.Offsets
+	offsets.AddOffset(migrationTopic, 0, 1, -1)
+	res, err := b.admin.DeleteRecords(ctx, offsets)
+	if err := errors.Join(err, res.Error()); err != nil {
+		t.Fatal(err)
+	}
+	for _, offset := range []int64{0, 3} {
+		last, records := read(offset)
+		if last.state != "ERROR" || !strings.Contains(last.info, errReaderOffset.Error()) || !strings.Contains(last.info, "events:0") || len(records) != 0 {
+			t.Fatalf("out-of-range start %d: state=%+v, records=%v", offset, last, records)
+		}
+	}
 }

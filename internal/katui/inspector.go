@@ -50,12 +50,11 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	p.content = tview.NewFlex().SetDirection(tview.FlexRow)
 	p.metadata = tview.NewTextView().SetTextColor(tcell.ColorSilver).SetScrollable(true).SetWrap(false)
 	p.status = tview.NewTextView().SetDynamicColors(true).SetTextColor(tcell.ColorLightGoldenrodYellow)
-	k := keyHint
-	p.navigation = tview.NewTextView().SetDynamicColors(true).SetWrap(false).SetText(
-		"Text  " + k("←/→") + " Cursor  " + k("Shift+←/→") + " Select\n" +
-			k("Alt+←/→") + " Pan 8  " + k("Ctrl+←/→") + " Pan half")
+	p.navigation = tview.NewTextView().SetDynamicColors(true).SetWrap(false)
 	p.viewer = newPayloadText(p.copyText)
 	p.nodeView = newPayloadText(p.copyText)
+	p.viewer.modeChanged, p.nodeView.modeChanged = p.updateNavigation, p.updateNavigation
+	p.updateNavigation()
 	p.tree = tview.NewTreeView()
 	p.mode = tview.NewButton("").SetSelectedFunc(p.chooseFormat)
 	p.delimButton = tview.NewButton(buttonLabel("Delimiter", "d")).SetSelectedFunc(p.delimiterDialog)
@@ -114,6 +113,19 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	}
 	p.rebuild()
 	return p
+}
+
+func (p *payloadPane) updateNavigation() {
+	k := keyHint
+	if p.viewer.HasFocus() && p.viewer.selecting || p.nodeView.HasFocus() && p.nodeView.selecting {
+		if p == p.u.inspector && p.u.followLatest {
+			p.u.followLatest = false
+			p.u.say("Follow latest paused for selection. Press f to resume.")
+		}
+		p.navigation.SetText("Selection · " + k("Arrows") + " Extend  " + k("Ctrl+C") + " Copy\n" + k("Space") + " / " + k("Esc") + " Exit selection")
+		return
+	}
+	p.navigation.SetText(k("Arrows") + " Scroll  " + k("Space") + " Select text\n" + k("Ctrl+←/→") + " Pan half  " + k("PgUp/PgDn") + " Page")
 }
 func (p *payloadPane) rebuild() {
 	p.mode.SetLabel(buttonLabel("Format", "m") + " · " + modeLabels[indexOf(modes, p.modeName)])

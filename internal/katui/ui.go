@@ -91,6 +91,8 @@ type ui struct {
 	sessionProfiles                map[string]profile
 	readers                        map[string]consumeOptions
 	reader                         *readerSession
+	readerViewDirty                atomic.Bool
+	nextReaderRefresh              time.Time
 	readerState                    readerUpdate
 	readOptions                    consumeOptions
 	readTopic                      string
@@ -229,7 +231,7 @@ func (u *ui) heartbeat(screen tcell.Screen) {
 			canceled = nil
 		case <-ticker.C:
 		}
-		if u.ctx.Err() != nil || u.monitoring.Load() || len(u.updates) > 0 {
+		if u.ctx.Err() != nil || u.monitoring.Load() || u.readerViewDirty.Load() || len(u.updates) > 0 {
 			_ = screen.PostEvent(u.updateEvent)
 		}
 	}
@@ -277,6 +279,10 @@ func (u *ui) applyUpdates() {
 	for range len(u.updates) {
 		update := <-u.updates
 		update()
+	}
+	if u.workspace == 2 && u.readerViewDirty.Load() &&
+		(u.readerState.state == "COMPLETE" || u.readerState.state == "ERROR" || !time.Now().Before(u.nextReaderRefresh)) {
+		u.refreshView()
 	}
 	u.poll()
 	if u.modalDepth == 0 {
@@ -363,6 +369,9 @@ func (u *ui) changeWorkspace(w int) {
 func (u *ui) showLocation() {
 	u.fullscreen = ""
 	u.invalidateMonitor()
+	if u.workspace != 2 {
+		u.readerViewDirty.Store(false)
+	}
 	if u.workspace == clustersWorkspace {
 		u.refreshView()
 		u.focus(u.mainPane())
@@ -455,6 +464,12 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	if ev.Key() == tcell.KeyCtrlC {
 		if _, ok := u.app.GetFocus().(*payloadText); ok {
 			return tcell.NewEventKey(ev.Key(), ev.Rune(), ev.Modifiers())
+		}
+	}
+	if ev.Key() == tcell.KeyEscape {
+		if v, ok := u.app.GetFocus().(*payloadText); ok && v.selecting {
+			v.setSelecting(false)
+			return nil
 		}
 	}
 	if u.modalDepth == 0 && u.connectionPending() {
@@ -773,7 +788,7 @@ func (u *ui) refreshView() {
 		"picker":       back + "  " + open + " group  " + k("/") + " Search  " + sortRefresh,
 		"group":        strings.Join([]string{back, partitions, manage, consume, k("s") + " Sort"}, "  "),
 		"group-detail": strings.Join([]string{back, manage, consume, k("r") + " Refresh"}, "  "),
-		"messages":     strings.Join([]string{back, consume, k("p") + " Pause", k("x") + " Stop", k("f") + " Follow", k("F4") + " Full", k("w") + " Compare", k("e") + " Uncheck"}, "  "),
+		"messages":     strings.Join([]string{back, consume, k("i") + " Records/Payload", k("p") + " Pause", k("x") + " Stop", k("f") + " Follow", k("F4") + " Full", k("w") + " Compare", k("e") + " Uncheck"}, "  "),
 	}
 	controls := actions[loc.kind]
 	u.controls.SetText(controls)
@@ -833,6 +848,10 @@ func (u *ui) refreshView() {
 	} else {
 		header, width, rows := u.browserRows(loc)
 		u.renderTable(header, width, rows)
+	}
+	if loc.kind == "messages" {
+		u.readerViewDirty.Store(false)
+		u.nextReaderRefresh = time.Now().Add(50 * time.Millisecond)
 	}
 	u.updateStatus()
 }

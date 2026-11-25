@@ -369,6 +369,9 @@ func (u *ui) updateStatus() {
 				stream = "follow"
 			}
 			summary += fmt.Sprintf(" · P%v %s limit %d", u.readOptions.partitions, stream, u.readOptions.limit)
+			if u.readOptions.start == startOffset {
+				summary += " · offset " + integer(u.readOptions.offset)
+			}
 		}
 	case "group", "group-detail":
 		g := u.groups[loc.group]

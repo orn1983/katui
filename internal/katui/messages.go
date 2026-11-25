@@ -36,7 +36,7 @@ func (u *ui) release(record *storedRecord) {
 			}
 		}
 	}
-	record.releasePayload()
+	record.discardPayload()
 }
 func (u *ui) buffer(r *storedRecord) {
 	for i, old := range u.records {
@@ -106,7 +106,7 @@ func (u *ui) pin(r *storedRecord) {
 }
 func (u *ui) recordRows() ([]string, []int, []tableRow) {
 	rows := make([]tableRow, 0, len(u.records))
-	filter := u.current().filter
+	filter := strings.ToLower(u.current().filter)
 	var pinnedOnly *storedRecord
 	if !u.followLatest && u.pinned != nil {
 		pinnedOnly = u.pinned
@@ -118,7 +118,7 @@ func (u *ui) recordRows() ([]string, []int, []tableRow) {
 		}
 	}
 	addRow := func(r *storedRecord, pinned bool) {
-		if !has(string(r.key), filter) && !has(string(r.value), filter) {
+		if filter != "" && !strings.Contains(strings.ToLower(string(r.key)), filter) && !strings.Contains(strings.ToLower(string(r.value)), filter) {
 			return
 		}
 		check := "[ ]"
@@ -191,11 +191,16 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 		}
 	case 'i':
 		if pane != nil {
-			if u.fullscreen == "table" {
+			inPayload := pane.root.HasFocus()
+			if u.fullscreen != "" {
 				u.fullscreen = ""
 				u.refreshView()
 			}
-			pane.focusViewer()
+			if inPayload {
+				u.focus(u.table)
+			} else {
+				pane.focusViewer()
+			}
 		}
 	case 'm', 'd', 'h', 'o', 'u', 'y', 'v', 's', 'E':
 		if pane != nil && pane.shortcut(ev.Rune()) {

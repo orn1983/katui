@@ -18,6 +18,10 @@ type payloadStore struct {
 	used   atomic.Int64
 	missed atomic.Uint64
 	files  map[string]int64
+	// The event loop can queue unlinks even while a spill write holds mu.
+	discardMu  sync.Mutex
+	discards   []string
+	discarding bool
 }
 
 func newPayloadStore(dir string, limit int64) *payloadStore {
@@ -55,6 +59,33 @@ func (s *payloadStore) remove(path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.removeLocked(path)
+}
+
+func (s *payloadStore) discard(path string) {
+	s.discardMu.Lock()
+	s.discards = append(s.discards, path)
+	if s.discarding {
+		s.discardMu.Unlock()
+		return
+	}
+	s.discarding = true
+	s.discardMu.Unlock()
+	go func() {
+		for {
+			s.discardMu.Lock()
+			paths := s.discards
+			s.discards = nil
+			if len(paths) == 0 {
+				s.discarding = false
+				s.discardMu.Unlock()
+				return
+			}
+			s.discardMu.Unlock()
+			for _, path := range paths {
+				s.remove(path)
+			}
+		}
+	}()
 }
 
 func (s *payloadStore) removeLocked(path string) {

@@ -22,13 +22,22 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-var starts = []string{"Live/end", "Recent offsets", "Retained beginning", "Timestamp"}
+const (
+	startEnd = iota
+	startRecent
+	startBeginning
+	startTimestamp
+	startOffset
+)
+
+var starts = []string{"Live/end", "Recent offsets", "Retained beginning", "Timestamp", "Exact offset"}
 var operators = []string{"Contains", "Starts with", "Equals"}
+var errReaderOffset = errors.New("starting offset is outside the available range")
 
 type consumeOptions struct {
 	partitions            []int32
 	start, keyOp, valueOp int
-	recent, limit         int64
+	recent, limit, offset int64
 	timestamp, key, value string
 	follow                bool
 }
@@ -104,6 +113,12 @@ func (r *storedRecord) truncated() bool { return r.valueSize > len(r.value) }
 func (r *storedRecord) releasePayload() {
 	if r.store != nil && r.fullPath != "" {
 		r.store.remove(r.fullPath)
+	}
+}
+
+func (r *storedRecord) discardPayload() {
+	if r.store != nil && r.fullPath != "" {
+		r.store.discard(r.fullPath)
 	}
 }
 
@@ -227,23 +242,35 @@ func (u *ui) consume(topic string, id int32) {
 	}
 	selector := newPartitionSelector(u)
 	form := tview.NewForm().SetItemPadding(0)
-	var recent, stamp *tview.InputField
-	setStart := func(i int) {
-		if recent != nil {
-			recent.SetDisabled(i != 1)
-			stamp.SetDisabled(i != 3)
-		}
-	}
-	start := dropdown(form, buttonLabel("Start", "Alt+S"), starts, opts.start, setStart)
-	recent = field(form, buttonLabel("Recent per partition", "Alt+R"), strconv.FormatInt(opts.recent, 10))
-	stamp = field(form, buttonLabel("Timestamp", "Alt+T"), opts.timestamp)
+	start := dropdown(form, buttonLabel("Start", "Alt+S"), starts, opts.start, nil)
+	recent := field(form, buttonLabel("Recent per partition", "Alt+R"), strconv.FormatInt(opts.recent, 10))
+	stamp := field(form, buttonLabel("Timestamp", "Alt+T"), opts.timestamp)
+	offset := field(form, buttonLabel("Offset per partition", "Alt+E"), strconv.FormatInt(opts.offset, 10))
 	key := field(form, buttonLabel("Key filter", "Alt+K"), opts.key)
 	keyOp := dropdown(form, buttonLabel("Key operator", "Alt+O"), operators, opts.keyOp, nil)
 	value := field(form, buttonLabel("Value filter", "Alt+V"), opts.value)
 	valueOp := dropdown(form, buttonLabel("Value operator", "Alt+W"), operators, opts.valueOp, nil)
 	limit := field(form, buttonLabel("Matching limit", "Alt+L"), strconv.FormatInt(opts.limit, 10))
 	follow := check(form, buttonLabel("Keep following", "Alt+F"), opts.follow)
-	setStart(opts.start)
+	// Only put the active start field in the focus order. tview redispatches
+	// focus when a disabled field is selected, including via a field shortcut.
+	renderForm := func(mode int) {
+		form.Clear(false).AddFormItem(start)
+		switch mode {
+		case startRecent:
+			form.AddFormItem(recent)
+		case startTimestamp:
+			form.AddFormItem(stamp)
+		case startOffset:
+			form.AddFormItem(offset)
+		}
+		form.AddFormItem(key).AddFormItem(keyOp).AddFormItem(value).AddFormItem(valueOp).AddFormItem(limit).AddFormItem(follow)
+	}
+	renderForm(opts.start)
+	start.SetSelectedFunc(func(_ string, mode int) {
+		renderForm(mode)
+		focusForm(u, form, 0)
+	})
 	split := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(selector.list, 0, 1, true).AddItem(form, 0, 2, false)
 	d := u.dialog("Consume · "+topic, split, selector.list)
 	d.focusables = []tview.Primitive{selector.list, form}
@@ -252,7 +279,9 @@ func (u *ui) consume(topic string, id int32) {
 	}
 	d.say("Loading partitions…")
 	loading := true
-	selector.changed = func() { d.say(fmt.Sprintf("%d / %d selected", len(selector.selected()), len(selector.ids))) }
+	selector.changed = func() {
+		d.hint(fmt.Sprintf("%d / %d partitions selected\n", len(selector.selected()), len(selector.ids)) + keyHint("Alt+G") + " Start from any field")
+	}
 	goRead := func() {
 		if loading {
 			return
@@ -273,19 +302,26 @@ func (u *ui) consume(topic string, id int32) {
 		opts.value = value.GetText()
 		opts.timestamp = stamp.GetText()
 		opts.follow = follow.IsChecked()
-		if opts.start == 1 {
+		switch opts.start {
+		case startRecent:
 			n := nonnegative(recent.GetText())
 			if n == nil {
 				d.say("Recent offsets must be a nonnegative integer")
 				return
 			}
 			opts.recent = *n
-		}
-		if opts.start == 3 {
+		case startTimestamp:
 			if _, err := timestamp(opts.timestamp); err != nil {
 				d.say(err.Error())
 				return
 			}
+		case startOffset:
+			n := nonnegative(offset.GetText())
+			if n == nil {
+				d.say("Starting offset must be a nonnegative integer")
+				return
+			}
+			opts.offset = *n
 		}
 		n := nonnegative(limit.GetText())
 		if n == nil {
@@ -311,6 +347,10 @@ func (u *ui) consume(topic string, id int32) {
 	}
 	d.button("Cancel", "Esc", d.cancel)
 	goBtn := d.button("Start", "c", goRead).SetDisabled(true)
+	fieldKeys := map[rune]tview.FormItem{
+		's': start, 'r': recent, 't': stamp, 'e': offset, 'k': key,
+		'o': keyOp, 'v': value, 'w': valueOp, 'l': limit, 'f': follow,
+	}
 	d.keymap(func(e *tcell.EventKey) bool {
 		if loading && e.Key() == tcell.KeyRune && e.Rune() == 'q' && e.Modifiers() == 0 && !isEditing(u.app.GetFocus()) {
 			d.cancel()
@@ -323,11 +363,9 @@ func (u *ui) consume(topic string, id int32) {
 		case 'g':
 			goRead()
 		default:
-			for i, r := range "srtkovwlf" {
-				if a == r {
-					focusForm(u, form, i)
-					return true
-				}
+			if item := fieldKeys[a]; item != nil {
+				focusForm(u, form, form.GetFormItemIndex(item.GetLabel()))
+				return true
 			}
 			if (e.Key() == tcell.KeyTab || e.Key() == tcell.KeyBacktab) && form.HasFocus() {
 				item, _ := form.GetFocusedItemIndex()
@@ -415,7 +453,7 @@ func (u *ui) beginReader(topic string, opts consumeOptions) error {
 		posted := u.post(func() {
 			if u.reader != session {
 				for _, r := range update.records {
-					r.releasePayload()
+					r.discardPayload()
 				}
 				return
 			}
@@ -428,9 +466,7 @@ func (u *ui) beginReader(topic string, opts consumeOptions) error {
 				u.buffer(r)
 			}
 			if u.workspace == 2 && len(update.records) > 0 {
-				u.refreshView()
-			} else if u.workspace == 2 {
-				u.updateStatus()
+				u.readerViewDirty.Store(true)
 			}
 		})
 		if !posted {
@@ -504,7 +540,7 @@ func (b *broker) readerPositions(ctx context.Context, topic string, o consumeOpt
 		return nil, err
 	}
 	var at kadm.ListedOffsets
-	if o.start == 3 {
+	if o.start == startTimestamp {
 		t, err := timestamp(o.timestamp)
 		if err != nil {
 			return nil, err
@@ -530,16 +566,21 @@ func (b *broker) readerPositions(ctx context.Context, topic string, o consumeOpt
 		}
 		next := *hi
 		switch o.start {
-		case 1:
+		case startRecent:
 			next = max(*lo, *hi-o.recent)
-		case 2:
+		case startBeginning:
 			next = *lo
-		case 3:
+		case startTimestamp:
 			n, err := listed(at, k)
 			if err != nil {
 				return nil, err
 			}
 			next = max(*lo, min(*hi, *n))
+		case startOffset:
+			if o.offset < *lo || o.offset > *hi {
+				return nil, fmt.Errorf("%s: %w (requested %d, available %d–%d)", k, errReaderOffset, o.offset, *lo, *hi)
+			}
+			next = o.offset
 		}
 		positions[id] = readPosition{next, *hi}
 	}
@@ -758,7 +799,7 @@ func (b *broker) readRecords(ctx context.Context, s *readerSession, topic string
 		}
 		var kafkaErr *kerr.Error
 		var certificateError *tls.CertificateVerificationError
-		if errors.As(err, &certificateError) || (errors.As(err, &kafkaErr) && !kafkaErr.Retriable) {
+		if errors.Is(err, errReaderOffset) || errors.As(err, &certificateError) || (errors.As(err, &kafkaErr) && !kafkaErr.Retriable) {
 			emit("ERROR", err.Error())
 			return
 		}

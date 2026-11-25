@@ -164,6 +164,10 @@ func TestQuotaCopyAndExport(t *testing.T) {
 		t.Fatal("copy accepted a short retained file")
 	}
 	release()
+	deadline := time.Now().Add(2 * time.Second)
+	for store.used.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if store.used.Load() != 0 || !retainedRecord(t, store, value).fullAvailable() {
 		t.Fatal("space wasn't recovered once the complete value was released")
 	}
@@ -210,6 +214,26 @@ func TestPayloadTextSelectsWithKeyboardAndMouse(t *testing.T) {
 	key(tcell.KeyCtrlC, tcell.ModCtrl)
 	if copied != doc.text {
 		t.Fatalf("select all: copied %q", copied)
+	}
+}
+
+func TestSelectionMovesByWholeCharacters(t *testing.T) {
+	var copied string
+	view := newPayloadText(func(text string) { copied = text })
+	doc, _ := indexPayloadText(t.Context(), "e\u0301 and more text")
+	view.setDocument(doc)
+	view.SetRect(0, 0, 12, 1)
+	key := view.InputHandler()
+	key(tcell.NewEventKey(tcell.KeyRight, 0, 0), nil)
+	if view.left == 0 || view.cursor != 0 || view.selecting {
+		t.Fatal("plain Right outside selection should pan the viewport")
+	}
+	key(tcell.NewEventKey(tcell.KeyHome, 0, 0), nil)
+	key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), nil)
+	key(tcell.NewEventKey(tcell.KeyRight, 0, 0), nil)
+	key(tcell.NewEventKey(tcell.KeyCtrlC, 0, tcell.ModCtrl), nil)
+	if copied != "e\u0301" {
+		t.Fatalf("selecting one character copied %q", copied)
 	}
 }
 
@@ -394,15 +418,14 @@ func TestPayloadTextPansWithoutChangingSelection(t *testing.T) {
 	key := func(k tcell.Key, mod tcell.ModMask) {
 		view.InputHandler()(tcell.NewEventKey(k, 0, mod), nil)
 	}
-	key(tcell.KeyDown, 0)
 	key(tcell.KeyRight, tcell.ModAlt)
-	if view.left != 8 || view.cursor != len("short\n") || view.anchor != view.cursor {
+	if view.left != 8 || view.cursor != 0 || view.anchor != view.cursor {
 		t.Fatal("Alt+Right did not pan eight columns while keeping the unselected cursor")
 	}
-	// Cursor movement after a pan deliberately follows the cursor again.
+	view.selectBy(len("short\n")+1, false)
+	view.InputHandler()(tcell.NewEventKey(tcell.KeyRune, ' ', 0), nil)
 	key(tcell.KeyRight, 0)
-	key(tcell.KeyRight, tcell.ModShift)
-	key(tcell.KeyRight, tcell.ModShift)
+	key(tcell.KeyRight, 0)
 	anchor, cursor := view.anchor, view.cursor
 	key(tcell.KeyLeft, tcell.ModAlt)
 	key(tcell.KeyRight, tcell.ModAlt)

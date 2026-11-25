@@ -280,7 +280,7 @@ func (u *ui) consume(topic string, id int32) {
 	d.say("Loading partitions…")
 	loading := true
 	selector.changed = func() {
-		d.hint(fmt.Sprintf("%d / %d partitions selected\n", len(selector.selected()), len(selector.ids)) + keyHint("Alt+G") + " Start from any field")
+		d.hint(fmt.Sprintf("%d / %d partitions selected\n", len(selector.selected()), len(selector.ids)) + keyHint("Alt+C") + " Start from any field")
 	}
 	goRead := func() {
 		if loading {
@@ -346,7 +346,7 @@ func (u *ui) consume(topic string, id int32) {
 		d.close()
 	}
 	d.button("Cancel", "Esc", d.cancel)
-	goBtn := d.button("Start", "c", goRead).SetDisabled(true)
+	goBtn := d.button("Start", "Alt+C", goRead).SetDisabled(true)
 	fieldKeys := map[rune]tview.FormItem{
 		's': start, 'r': recent, 't': stamp, 'e': offset, 'k': key,
 		'o': keyOp, 'v': value, 'w': valueOp, 'l': limit, 'f': follow,
@@ -360,8 +360,10 @@ func (u *ui) consume(topic string, id int32) {
 		switch a := alt(e); a {
 		case 'p':
 			u.app.SetFocus(selector.list)
-		case 'g':
-			goRead()
+		case 'c':
+			if !goBtn.IsDisabled() {
+				goRead()
+			}
 		default:
 			if item := fieldKeys[a]; item != nil {
 				focusForm(u, form, form.GetFormItemIndex(item.GetLabel()))

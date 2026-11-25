@@ -225,11 +225,12 @@ func TestSelectionMovesByWholeCharacters(t *testing.T) {
 	view.SetRect(0, 0, 12, 1)
 	key := view.InputHandler()
 	key(tcell.NewEventKey(tcell.KeyRight, 0, 0), nil)
-	if view.left == 0 || view.cursor != 0 || view.selecting {
-		t.Fatal("plain Right outside selection should pan the viewport")
+	if view.left == 0 || view.cursor != 0 || view.mode != payloadScroll {
+		t.Fatal("plain Right in Scroll should pan the viewport")
 	}
 	key(tcell.NewEventKey(tcell.KeyHome, 0, 0), nil)
 	key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), nil)
+	key(tcell.NewEventKey(tcell.KeyRune, 'v', 0), nil)
 	key(tcell.NewEventKey(tcell.KeyRight, 0, 0), nil)
 	key(tcell.NewEventKey(tcell.KeyCtrlC, 0, tcell.ModCtrl), nil)
 	if copied != "e\u0301" {
@@ -392,7 +393,7 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	waitFor("Full view did not pan independently of its selection", func() bool {
 		return p.viewer.left == left-pan && p.viewer.anchor == anchor && p.viewer.cursor == cursor
 	})
-	if err := screen.PostEvent(tcell.NewEventKey(tcell.KeyCtrlC, 0, tcell.ModCtrl)); err != nil {
+	if err := screen.PostEvent(tcell.NewEventKey(tcell.KeyRune, 'y', 0)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -401,7 +402,7 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 			t.Fatalf("clipboard received %q", text)
 		}
 	case <-ctx.Done():
-		t.Fatal("Ctrl+C did not copy the selected search result")
+		t.Fatal("y did not copy the selected search result")
 	}
 }
 
@@ -424,6 +425,7 @@ func TestPayloadTextPansWithoutChangingSelection(t *testing.T) {
 	}
 	view.selectBy(len("short\n")+1, false)
 	view.InputHandler()(tcell.NewEventKey(tcell.KeyRune, ' ', 0), nil)
+	view.InputHandler()(tcell.NewEventKey(tcell.KeyRune, 'v', 0), nil)
 	key(tcell.KeyRight, 0)
 	key(tcell.KeyRight, 0)
 	anchor, cursor := view.anchor, view.cursor

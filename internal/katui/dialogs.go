@@ -41,6 +41,10 @@ func (u *ui) newDialog(title string, body tview.Primitive) *dialog {
 }
 
 func (u *ui) dialog(title string, body tview.Primitive, initial tview.Primitive) *dialog {
+	return u.openDialog(title, body, initial, false)
+}
+
+func (u *ui) openDialog(title string, body, initial tview.Primitive, fullscreen bool) *dialog {
 	u.modalDepth++
 	u.modalID++
 	if u.modalDepth == 1 {
@@ -48,13 +52,16 @@ func (u *ui) dialog(title string, body tview.Primitive, initial tview.Primitive)
 	}
 	d := u.newDialog(title, body)
 	d.id, d.previous = fmt.Sprintf("modal-%d", u.modalID), u.app.GetFocus()
-	top := 1
-	if u.workspace == clustersWorkspace {
-		top = 2 // Keep the workspace bar above cluster editors and password prompts.
+	var page tview.Primitive = d.root
+	if !fullscreen {
+		top := 1
+		if u.workspace == clustersWorkspace {
+			top = 2 // Keep the workspace bar above cluster editors and password prompts.
+		}
+		page = tview.NewGrid().SetRows(top, 0, 1).SetColumns(2, 0, 2).
+			AddItem(d.root, 1, 1, 1, 1, 0, 0, true)
 	}
-	outer := tview.NewGrid().SetRows(top, 0, 1).SetColumns(2, 0, 2).
-		AddItem(d.root, 1, 1, 1, 1, 0, 0, true)
-	u.pages.AddPage(d.id, outer, true, true)
+	u.pages.AddPage(d.id, page, true, true)
 	u.app.SetFocus(initial)
 	return d
 }
@@ -259,22 +266,23 @@ func (u *ui) help() {
 		"Topics and consumer groups",
 		k("h") + " Internal topics  " + k("g") + " Topic consumers",
 		k("n") + " Create topic  " + k("a") + " Manage  " + k("d") + " Delete topic  " + k("c") + " Start reader",
-		k("Space") + " Toggle partition  " + k("a") + " All  " + k("n") + " None  " + k("c") + " Start reader",
-		k("Alt+G") + " Start directly from a filter or form field",
+		k("Space") + " Toggle partition  " + k("a") + " All  " + k("n") + " None",
+		k("Alt+C") + " Start consuming from the dialog, including while typing",
 		k("r") + " Review changes  " + k("a") + " Apply after entering the exact target name",
 		"",
 		"Messages and payloads",
-		k("i") + " Switch records/payload  " + k("b") + " Records  " + k("m") + " Format  " + k("F4") + " Full payload",
+		k("i") + " Switch records/payload  " + k("b") + " Records  " + k("m") + " Format  " + k("z") + " Toggle Fullscreen",
 		k("p") + " Pause  " + k("x") + " Stop  " + k("f") + " Follow latest  ·  Clear buffer in Commands",
 		k("Space") + " Check  " + k("a") + " Check matching  " + k("w") + " Compare  " + k("e") + " Uncheck all",
 		k("o") + " CSV columns  " + k("u") + " Protobuf  " + k("d") + " Delimiter  " + k("h") + " Header",
-		k("y") + " Copy Value  " + k("v") + " Copy View  " + k("s") + " Save value to file",
+		k(":") + " Copy Value or Copy View  " + k("s") + " Save value to file",
 		"In payload text, " + k("←/→") + " Pan 8 columns  " + k("↑/↓") + " Scroll 4 lines",
-		k("Ctrl+←/→") + " Pan half the viewport  " + k("PgUp/PgDn") + " Page",
-		k("Space") + " Selection mode  " + k("Arrows") + " Move and extend  " + k("Esc") + " Exit selection",
-		k("Shift+arrows") + " Start selection  " + k("Ctrl+A") + " Select all  " + k("Ctrl+C") + " Copy selection",
+		k("Alt+←/→") + " Pan 8 columns  " + k("Ctrl+←/→") + " Pan half the viewport  " + k("PgUp/PgDn") + " Page",
+		k("Space") + " Toggle Cursor  ·  In Cursor, " + k("Arrows") + " Move  " + k("v") + " Toggle Selection",
+		"In Selection, " + k("Arrows") + " Extend or shrink  " + k("Esc") + " Return to Cursor",
+		k("Shift+arrows") + " Extend selection  " + k("Ctrl+A") + " Select all  " + k("y") + " / " + k("Ctrl+C") + " Copy selected text",
 		"In the tree, " + k("←/→") + " Collapse or expand nodes",
-		k("/") + " Search payload in Full view  " + k("n") + " Next  " + k("p") + " Previous  " + k("l") + " Load full",
+		k("/") + " Search payload in Fullscreen  " + k("n") + " Next  " + k("p") + " Previous  " + k("l") + " Load full",
 		"Confirm the larger load with " + k("Enter") + " or cancel with " + k("Esc"),
 		"",
 		"Files and editors",
@@ -301,6 +309,10 @@ func (u *ui) palette() {
 	add("Kafka clusters", '4', u.showClusters)
 	if u.workspace == 2 && len(u.records) > 0 {
 		add("Clear message buffer", 'l', u.clearBuffer)
+	}
+	if u.workspace == 2 && u.inspector != nil && u.pinned != nil {
+		add("Copy Value", 0, u.inspector.copyValue)
+		add("Copy View", 0, u.inspector.copyView)
 	}
 	add("Change color theme", 't', u.theme)
 	add("Help", '?', u.help)

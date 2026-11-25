@@ -410,18 +410,18 @@ func parseCSV(ctx context.Context, raw string, p profile, full bool, rowLimit, c
 		if full {
 			notices = append(notices, "CSV display limited to 50,000 rows.")
 		} else {
-			notices = append(notices, "CSV preview row limit reached; use F4 for more rows.")
+			notices = append(notices, "CSV preview row limit reached. Press z for Fullscreen.")
 		}
 	}
 	if columnCap {
 		if full {
 			notices = append(notices, "CSV display limited to 256 columns.")
 		} else {
-			notices = append(notices, "CSV preview limited to 64 columns; use F4 for more columns.")
+			notices = append(notices, "CSV preview limited to 64 columns. Press z for Fullscreen.")
 		}
 	}
 	if cellCap {
-		notices = append(notices, "CSV preview cells limited to 120 characters; use F4 for complete fields.")
+		notices = append(notices, "CSV preview cells limited to 120 characters. Press z for Fullscreen.")
 	}
 	if budgetCap {
 		notices = append(notices, "CSV cell text reached the display budget.")
@@ -680,7 +680,7 @@ func (u *ui) preparePayload(ctx context.Context, records []*storedRecord, profil
 		}
 		if !full && r.truncated() {
 			result.incomplete = true
-			notices = append(notices, id+": preview truncated. Open F4 for full payload.")
+			notices = append(notices, id+" preview truncated. Press z for Fullscreen.")
 			write(id, string(value))
 			continue
 		}
@@ -775,7 +775,7 @@ func (u *ui) preparePayload(ctx context.Context, records []*storedRecord, profil
 					if full {
 						notices = append(notices, "Tree limited to 50,000 nodes and 128 levels.")
 					} else {
-						notices = append(notices, "Tree preview limited to 2,000 nodes and 30 levels. Open F4 for more.")
+						notices = append(notices, "Tree preview limited to 2,000 nodes and 30 levels. Press z for Fullscreen.")
 					}
 				}
 			}

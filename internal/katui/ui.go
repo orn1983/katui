@@ -57,7 +57,7 @@ type ui struct {
 	stacks                         [4][]*location
 	pickerHistory                  map[string]*location
 	modalID, modalDepth            int
-	fullscreen                     string
+	tableZoom                      bool
 	width, height                  int
 	accent                         tcell.Color
 	message                        string
@@ -367,7 +367,7 @@ func (u *ui) changeWorkspace(w int) {
 	u.showLocation()
 }
 func (u *ui) showLocation() {
-	u.fullscreen = ""
+	u.tableZoom = false
 	u.invalidateMonitor()
 	if u.workspace != 2 {
 		u.readerViewDirty.Store(false)
@@ -392,8 +392,8 @@ func (u *ui) push(loc *location) {
 	u.showLocation()
 }
 func (u *ui) back() {
-	if u.fullscreen != "" {
-		u.fullscreen = ""
+	if u.tableZoom {
+		u.tableZoom = false
 		u.refreshView()
 		u.focus(u.mainPane())
 		return
@@ -466,9 +466,8 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 			return tcell.NewEventKey(ev.Key(), ev.Rune(), ev.Modifiers())
 		}
 	}
-	if ev.Key() == tcell.KeyEscape {
-		if v, ok := u.app.GetFocus().(*payloadText); ok && v.selecting {
-			v.setSelecting(false)
+	if ev.Key() == tcell.KeyEscape && u.modalDepth == 0 {
+		if v, ok := u.app.GetFocus().(*payloadText); ok && v.exitMode() {
 			return nil
 		}
 	}
@@ -537,10 +536,6 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.cycleFocus(ev.Key() == tcell.KeyBacktab)
 		return nil
 	}
-	if ev.Key() == tcell.KeyF4 && u.workspace == 2 {
-		u.fullRecord()
-		return nil
-	}
 	key := shortcutRune(ev)
 	if key == 0 {
 		return ev
@@ -560,12 +555,12 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 		u.changeWorkspace(int(key - '1'))
 	case '/':
 		if u.workspace == 2 && u.inspector != nil && u.inspector.root.HasFocus() {
-			if p := u.fullRecord(); p != nil {
+			if p := u.fullscreenRecord(); p != nil {
 				u.app.SetFocus(p.search)
 			}
 			return nil
 		}
-		u.fullscreen = ""
+		u.tableZoom = false
 		u.refreshView()
 		u.focus(u.search)
 	case '4':
@@ -577,22 +572,16 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	case '?':
 		u.help()
 	case 'z':
-		if u.fullscreen != "" {
-			u.fullscreen = ""
-			u.refreshView()
+		if u.workspace == 2 {
+			u.fullscreenRecord()
+			return nil
+		}
+		u.tableZoom = !u.tableZoom
+		u.refreshView()
+		if !u.tableZoom {
 			u.focus(u.mainPane())
-		} else {
-			u.fullscreen = "table"
-			if u.workspace == 2 && u.inspector != nil && u.inspector.root.HasFocus() {
-				u.fullscreen = "inspector"
-			}
-			u.refreshView()
 		}
 	case 'b':
-		if u.fullscreen == "inspector" {
-			u.fullscreen = ""
-			u.refreshView()
-		}
 		u.focus(u.mainPane())
 	case 's':
 		if u.workspace == 2 {
@@ -655,10 +644,7 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 }
 
 func (u *ui) cycleFocus(reverse bool) {
-	if u.fullscreen != "" {
-		if u.fullscreen == "inspector" && u.inspector != nil {
-			u.inspector.cycle(reverse)
-		}
+	if u.tableZoom {
 		return
 	}
 	if u.workspace == 2 && u.inspector != nil {
@@ -739,10 +725,6 @@ func (u *ui) openRow() {
 		u.push(&location{kind: "group-detail", group: row.group, topic: row.topic, partition: row.partition})
 	case "messages":
 		if u.inspector != nil {
-			if u.fullscreen == "table" {
-				u.fullscreen = ""
-				u.refreshView()
-			}
 			u.inspector.focusViewer()
 		}
 	}
@@ -788,7 +770,7 @@ func (u *ui) refreshView() {
 		"picker":       back + "  " + open + " group  " + k("/") + " Search  " + sortRefresh,
 		"group":        strings.Join([]string{back, partitions, manage, consume, k("s") + " Sort"}, "  "),
 		"group-detail": strings.Join([]string{back, manage, consume, k("r") + " Refresh"}, "  "),
-		"messages":     strings.Join([]string{back, consume, k("i") + " Records/Payload", k("p") + " Pause", k("x") + " Stop", k("f") + " Follow", k("F4") + " Full", k("w") + " Compare", k("e") + " Uncheck"}, "  "),
+		"messages":     strings.Join([]string{back, consume, k("i") + " Records/Payload", k("p") + " Pause", k("x") + " Stop", k("f") + " Follow", k("z") + " Fullscreen", k("w") + " Compare", k("e") + " Uncheck"}, "  "),
 	}
 	controls := actions[loc.kind]
 	u.controls.SetText(controls)
@@ -796,7 +778,7 @@ func (u *ui) refreshView() {
 	if u.width > 0 && tview.TaggedStringWidth(controls) > u.width {
 		controlRows = 2
 	}
-	layout := fmt.Sprintf("%s/%s/%t/%d", loc.kind, u.fullscreen, u.width < 100, controlRows)
+	layout := fmt.Sprintf("%s/%t/%t/%d", loc.kind, u.tableZoom, u.width < 100, controlRows)
 	if layout != u.layout {
 		u.layout = layout
 		u.body.Clear()
@@ -805,7 +787,7 @@ func (u *ui) refreshView() {
 			statusRows = 4
 		}
 		u.shell.Clear().AddItem(u.header, 1, 0, false)
-		if u.fullscreen == "" {
+		if !u.tableZoom {
 			u.shell.AddItem(u.tabs, 1, 0, false).AddItem(u.controls, controlRows, 0, false).AddItem(u.search, 1, 0, false)
 		}
 		u.shell.AddItem(u.body, 0, 1, true).AddItem(u.status, statusRows, 0, false)
@@ -818,12 +800,7 @@ func (u *ui) refreshView() {
 			} else {
 				u.body.SetDirection(tview.FlexColumn)
 			}
-			if u.fullscreen != "inspector" {
-				u.body.AddItem(u.table, 0, 1, true)
-			}
-			if u.fullscreen != "table" {
-				u.body.AddItem(u.inspector.root, 0, 1, false)
-			}
+			u.body.AddItem(u.table, 0, 1, true).AddItem(u.inspector.root, 0, 1, false)
 		} else {
 			u.body.SetDirection(tview.FlexColumn).AddItem(u.mainPane(), 0, 1, true)
 		}

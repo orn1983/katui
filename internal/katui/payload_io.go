@@ -45,10 +45,18 @@ func deliverClipboard(ctx context.Context, text, localCommand string, terminal f
 
 func (p *payloadPane) copyText(text string) {
 	if text == "" {
-		p.notice("Select text with Shift+arrows or mouse drag")
+		p.notice("Select text with Space then v, Shift+arrows, or a mouse drag")
 		return
 	}
 	go p.sendClipboard(text)
+}
+
+func (p *payloadPane) copyMenu() {
+	list := p.u.newList().ShowSecondaryText(false)
+	d := p.u.dialog("Copy payload", list, list)
+	list.AddItem("Copy Value", "", 0, func() { d.close(); p.copyValue() })
+	list.AddItem("Copy View", "", 0, func() { d.close(); p.copyView() })
+	d.hint(keyHint("Enter") + " Copy  " + keyHint("Esc") + " Back")
 }
 
 func (p *payloadPane) sendClipboard(text string) {

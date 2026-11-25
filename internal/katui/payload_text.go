@@ -127,17 +127,26 @@ func (d payloadDocument) position(row int, line string, target int, byCell bool)
 	return pos
 }
 
+type payloadTextMode int
+
+const (
+	payloadScroll payloadTextMode = iota
+	payloadCursor
+	payloadSelection
+)
+
 // payloadText is a read-only viewport. Rendering or selecting a small region
 // does not require reformatting the rest of a large payload.
 type payloadText struct {
 	*tview.Box
-	doc                 payloadDocument
-	top, left           int
-	cursor, anchor      int
-	match               [2]int
-	dragging, selecting bool
-	modeChanged         func()
-	copy                func(string)
+	doc            payloadDocument
+	top, left      int
+	cursor, anchor int
+	match          [2]int
+	dragging       bool
+	mode           payloadTextMode
+	modeChanged    func()
+	copy           func(string)
 }
 
 func newPayloadText(copySelection func(string)) *payloadText {
@@ -154,7 +163,7 @@ func (v *payloadText) setDocument(doc payloadDocument) {
 	v.top, v.left, v.cursor, v.anchor = 0, 0, 0, 0
 	v.match = [2]int{}
 	v.dragging = false
-	v.setSelecting(false)
+	v.setMode(payloadScroll)
 }
 
 func (v *payloadText) Focus(delegate func(tview.Primitive)) {
@@ -164,13 +173,32 @@ func (v *payloadText) Focus(delegate func(tview.Primitive)) {
 	}
 }
 
-func (v *payloadText) setSelecting(on bool) {
-	if v.selecting != on {
-		v.selecting = on
+func (v *payloadText) Blur() {
+	v.Box.Blur()
+	if v.modeChanged != nil {
+		v.modeChanged()
+	}
+}
+
+func (v *payloadText) setMode(mode payloadTextMode) {
+	if v.mode != mode {
+		v.mode = mode
 		if v.modeChanged != nil {
 			v.modeChanged()
 		}
 	}
+}
+
+func (v *payloadText) exitMode() bool {
+	switch v.mode {
+	case payloadSelection:
+		v.setMode(payloadCursor)
+	case payloadCursor:
+		v.setMode(payloadScroll)
+	default:
+		return false
+	}
+	return true
 }
 
 func (v *payloadText) row(offset int) int {
@@ -226,19 +254,15 @@ func (v *payloadText) maxTop(height int) int {
 	return max(0, len(v.doc.lines)-max(1, height))
 }
 
-func (v *payloadText) beginSelection(extend bool) {
+func (v *payloadText) placeVisibleCursor() {
 	_, _, width, height := v.GetInnerRect()
 	row := v.row(v.cursor)
 	start, end := v.line(row)
 	column := v.doc.position(row, v.doc.text[start:end], v.cursor-start, false).cell
 	if row < v.top || row >= v.top+max(1, height) || column < v.left || column >= v.left+max(1, width) {
-		v.cursor = v.offsetAt(v.top, 0)
-		extend = false
-	}
-	if !extend {
+		v.cursor = v.offsetAt(min(v.top, len(v.doc.lines)-1), 0)
 		v.anchor = v.cursor
 	}
-	v.setSelecting(true)
 }
 
 func (v *payloadText) offsetAt(row, column int) int {
@@ -268,7 +292,7 @@ func (v *payloadText) Draw(screen tcell.Screen) {
 				style = style.Foreground(tcell.ColorBlack).Background(tcell.ColorLightSkyBlue)
 			case matched:
 				style = style.Foreground(tcell.ColorBlack).Background(tcell.ColorYellow)
-			case v.selecting && v.HasFocus() && at+a == v.cursor:
+			case v.mode != payloadScroll && v.HasFocus() && at+a == v.cursor:
 				style = style.Reverse(true)
 			}
 			width := graphemeWidth(g)
@@ -282,7 +306,7 @@ func (v *payloadText) Draw(screen tcell.Screen) {
 			}
 			col += width
 		}
-		if v.selecting && v.HasFocus() && end == v.cursor && col >= 0 && col < w {
+		if v.mode != payloadScroll && v.HasFocus() && end == v.cursor && col >= 0 && col < w {
 			screen.SetContent(x+col, y+row-v.top, ' ', nil, tcell.StyleDefault.Reverse(true))
 		}
 	}
@@ -290,10 +314,10 @@ func (v *payloadText) Draw(screen tcell.Screen) {
 
 func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) {
 	return v.WrapInputHandler(func(event *tcell.EventKey, _ func(tview.Primitive)) {
-		key, mod := event.Key(), event.Modifiers()
+		key, mod, letter := event.Key(), event.Modifiers(), shortcutRune(event)
 		_, _, width, height := v.GetInnerRect()
 		if (key == tcell.KeyLeft || key == tcell.KeyRight) &&
-			(mod&(tcell.ModAlt|tcell.ModCtrl) != 0 || !v.selecting && mod&tcell.ModShift == 0) {
+			(mod&(tcell.ModAlt|tcell.ModCtrl) != 0 || v.mode == payloadScroll && mod&tcell.ModShift == 0) {
 			delta := 8
 			if mod&tcell.ModCtrl != 0 {
 				delta = max(delta, width/2)
@@ -304,26 +328,48 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 			v.left = max(0, min(v.maxLeft(width), v.left+delta))
 			return
 		}
-		if shortcutRune(event) == ' ' {
-			if v.selecting {
-				v.setSelecting(false)
+		switch {
+		case key == tcell.KeyCtrlC || letter == 'y':
+			lo, hi := min(v.anchor, v.cursor), max(v.anchor, v.cursor)
+			v.copy(v.doc.text[lo:hi])
+			return
+		case key == tcell.KeyCtrlA:
+			v.anchor, v.cursor = 0, len(v.doc.text)
+			return
+		case letter == ' ':
+			if v.mode == payloadScroll {
+				v.placeVisibleCursor()
+				v.anchor = v.cursor
+				v.setMode(payloadCursor)
 			} else {
-				v.beginSelection(false)
+				v.setMode(payloadScroll)
+			}
+			return
+		case letter == 'v':
+			switch v.mode {
+			case payloadCursor:
+				v.anchor = v.cursor
+				v.setMode(payloadSelection)
+			case payloadSelection:
+				v.setMode(payloadCursor)
 			}
 			return
 		}
-		if !v.selecting && mod&tcell.ModShift != 0 {
+		if v.mode != payloadSelection && mod&tcell.ModShift != 0 {
 			switch key {
 			case tcell.KeyLeft, tcell.KeyRight, tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd, tcell.KeyPgUp, tcell.KeyPgDn:
-				v.beginSelection(true)
+				if v.mode == payloadScroll {
+					v.placeVisibleCursor()
+				}
+				v.setMode(payloadSelection)
 			}
 		}
-		if !v.selecting {
+		if v.mode == payloadScroll {
 			switch {
-			case key == tcell.KeyUp || shortcutRune(event) == 'k':
+			case key == tcell.KeyUp || letter == 'k':
 				v.top = max(0, v.top-4)
 				return
-			case key == tcell.KeyDown || shortcutRune(event) == 'j':
+			case key == tcell.KeyDown || letter == 'j':
 				v.top = min(v.maxTop(height), v.top+4)
 				return
 			case key == tcell.KeyPgUp:
@@ -350,14 +396,7 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 		row := v.row(cursor)
 		start, end := v.line(row)
 		delta := 0
-		switch event.Key() {
-		case tcell.KeyCtrlA:
-			v.anchor, v.cursor = 0, len(v.doc.text)
-			return
-		case tcell.KeyCtrlC:
-			lo, hi := min(v.anchor, v.cursor), max(v.anchor, v.cursor)
-			v.copy(v.doc.text[lo:hi])
-			return
+		switch key {
 		case tcell.KeyLeft:
 			if cursor > start {
 				cursor = start + v.doc.position(row, v.doc.text[start:end], cursor-start-1, false).byteOffset
@@ -387,13 +426,12 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 		case tcell.KeyDown:
 			delta = 1
 		case tcell.KeyPgUp, tcell.KeyPgDn:
-			_, _, _, height := v.GetInnerRect()
 			delta = max(1, height-1)
-			if event.Key() == tcell.KeyPgUp {
+			if key == tcell.KeyPgUp {
 				delta = -delta
 			}
 		case tcell.KeyRune:
-			switch shortcutRune(event) {
+			switch letter {
 			case 'j':
 				delta = 1
 			case 'k':
@@ -410,7 +448,7 @@ func (v *payloadText) InputHandler() func(*tcell.EventKey, func(tview.Primitive)
 			lineStart, lineEnd := v.line(nextRow)
 			cursor = lineStart + v.doc.position(nextRow, v.doc.text[lineStart:lineEnd], column, true).byteOffset
 		}
-		v.selectBy(cursor, v.selecting)
+		v.selectBy(cursor, v.mode == payloadSelection)
 	})
 }
 

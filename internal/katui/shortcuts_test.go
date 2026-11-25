@@ -74,11 +74,29 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 	wait("i did not enter the payload", p.viewer.HasFocus)
 	clusterKey(t, screen, tcell.KeyRune, ' ', 0)
 	clusterKey(t, screen, tcell.KeyRight, 0, 0)
-	wait("selection mode did not extend the selection and pin the current record", func() bool {
-		return p.viewer.selecting && p.viewer.cursor == 1 && p.viewer.anchor == 0 && !u.followLatest
+	wait("Space did not enter Cursor mode and pin the current record", func() bool {
+		return p.viewer.mode == payloadCursor && p.viewer.cursor == 1 && p.viewer.anchor == 1 && !u.followLatest
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'y', 0)
+	wait("y with no selection did not show how to select text", func() bool {
+		return strings.Contains(u.message, "Select text")
+	})
+	var copied string
+	u.post(func() { p.viewer.copy = func(text string) { copied = text } })
+	clusterKey(t, screen, tcell.KeyRune, 'v', 0)
+	clusterKey(t, screen, tcell.KeyRight, 0, 0)
+	wait("v did not enable Selection mode", func() bool {
+		return p.viewer.mode == payloadSelection && p.viewer.anchor == 1 && p.viewer.cursor == 2
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'v', 0)
+	clusterKey(t, screen, tcell.KeyRune, 'y', 0)
+	wait("y did not copy the selected character after leaving Selection mode", func() bool {
+		return p.viewer.mode == payloadCursor && copied == "1"
 	})
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
-	wait("Esc left Messages instead of selection mode", func() bool { return !p.viewer.selecting && p.viewer.HasFocus() && u.workspace == 2 })
+	wait("Esc did not return to Scroll mode", func() bool {
+		return p.viewer.mode == payloadScroll && p.viewer.HasFocus() && u.workspace == 2
+	})
 	clusterKey(t, screen, tcell.KeyRune, 'i', 0)
 	wait("i did not toggle back to the record list", u.table.HasFocus)
 	clusterKey(t, screen, tcell.KeyRune, 'l', 0)
@@ -107,19 +125,32 @@ func TestMessageNavigationEntersPayloadBeforeFormatControls(t *testing.T) {
 	if data, err := os.ReadFile(path); err != nil || string(data) != value {
 		t.Fatalf("Save did not preserve the original bytes: %v", err)
 	}
+	clusterKey(t, screen, tcell.KeyRune, 'z', 0)
+	wait("z did not open Fullscreen at the terminal size", func() bool {
+		_, front := u.pages.GetFrontPage()
+		root, ok := front.(*tview.Flex)
+		if !ok || u.modalDepth != 1 || strings.TrimSpace(root.GetTitle()) != "Fullscreen" {
+			return false
+		}
+		x, y, width, height := root.GetRect()
+		w, h := screen.Size()
+		return x == 0 && y == 0 && width == w && height == h
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'z', 0)
+	wait("z did not exit Fullscreen", func() bool { return p.viewer.HasFocus() && u.modalDepth == 0 })
 	clusterKey(t, screen, tcell.KeyRune, '/', 0)
-	clusterKey(t, screen, tcell.KeyRune, 'm', 0)
+	clusterKey(t, screen, tcell.KeyRune, 'z', 0)
 	wait("the inspector search shortcut did not enter payload search", func() bool {
 		input, ok := u.app.GetFocus().(*tview.InputField)
-		return ok && input.GetText() == "m" && len(u.payloadJobs) == 0 && u.modalDepth == 1
+		return ok && input.GetText() == "z" && len(u.payloadJobs) == 0 && u.modalDepth == 1
 	})
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
-	wait("Esc did not return from search to the Full view payload", func() bool {
+	wait("Esc did not return from search to the Fullscreen payload", func() bool {
 		focus, ok := u.app.GetFocus().(*payloadText)
 		return ok && focus != p.viewer && u.modalDepth == 1
 	})
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
-	wait("closing Full view did not return to the inspector", func() bool { return p.viewer.HasFocus() && u.modalDepth == 0 })
+	wait("closing Fullscreen did not return to the inspector", func() bool { return p.viewer.HasFocus() && u.modalDepth == 0 })
 	clusterKey(t, screen, tcell.KeyRune, ':', tcell.ModShift)
 	wait("the command palette did not open", func() bool { return u.modalDepth == 1 })
 	clusterKey(t, screen, tcell.KeyRune, 'l', 0)

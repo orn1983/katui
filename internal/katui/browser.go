@@ -434,7 +434,7 @@ func (u *ui) updateStatus() {
 	if u.workspace != 2 && u.monitorPaused {
 		summary = "Connection canceled  ·  " + k("r") + " Retry  ·  " + k("4") + " Clusters"
 	}
-	if u.fullscreen != "" {
+	if u.tableZoom {
 		bottom = k("Esc") + " " + k("z") + " Restore  ·  " + bottom
 	}
 	if u.message != "" {

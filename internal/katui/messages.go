@@ -191,18 +191,13 @@ func (u *ui) messageKeys(ev *tcell.EventKey) *tcell.EventKey {
 		}
 	case 'i':
 		if pane != nil {
-			inPayload := pane.root.HasFocus()
-			if u.fullscreen != "" {
-				u.fullscreen = ""
-				u.refreshView()
-			}
-			if inPayload {
+			if pane.root.HasFocus() {
 				u.focus(u.table)
 			} else {
 				pane.focusViewer()
 			}
 		}
-	case 'm', 'd', 'h', 'o', 'u', 'y', 'v', 's', 'E':
+	case 'm', 'd', 'h', 'o', 'u', 's', 'E':
 		if pane != nil && pane.shortcut(ev.Rune()) {
 			return nil
 		}
@@ -273,7 +268,7 @@ func metadataText(r *storedRecord) string {
 	}
 	return out.String()
 }
-func (u *ui) fullRecord() *payloadPane {
+func (u *ui) fullscreenRecord() *payloadPane {
 	if u.pinned == nil {
 		u.say("Select a buffered record first")
 		return nil
@@ -296,9 +291,9 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 	p.rebuild()
 	title := "Checked records"
 	if full {
-		title = "Full payload"
+		title = "Fullscreen"
 	}
-	d := u.dialog(title, p.root, p.content)
+	d := u.openDialog(title, p.root, p.content, full)
 	p.dialog = d
 	d.focusables = p.focusables()
 	close := func() {
@@ -324,11 +319,14 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 			p.loadCanceled = true
 			p.updateLoadButton()
 			p.status.SetText("Loading canceled")
-			d.hint(keyHint("l") + " Load again  " + keyHint("Esc") + " Close")
+			d.hint(keyHint("l") + " Load again  " + keyHint("z") + " Exit Fullscreen")
 			return
 		}
 		if full && p.search.HasFocus() {
 			p.focusViewer()
+			return
+		}
+		if v, ok := u.app.GetFocus().(*payloadText); ok && v.exitMode() {
 			return
 		}
 		close()
@@ -340,22 +338,21 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 	} else {
 		d.button("Payloads", "1", func() { p.showMetadata(false) })
 		d.button("Metadata", "2", func() { p.showMetadata(true) })
-		d.button("Full", "F4", func() { u.payloadDialog(true, records, p.modeName) })
+		d.button("Fullscreen", "z", func() { u.payloadDialog(true, records, p.modeName) })
 	}
-	d.button("Value", "y", p.copyValue)
-	d.button("View", "v", p.copyView)
+	d.button("Copy", ":", p.copyMenu)
 	d.button("Save", "s", p.exportValue)
-	d.button("Back", "Esc", func() { d.cancel() })
+	if full {
+		d.button("Exit Fullscreen", "z", close)
+	} else {
+		d.button("Back", "Esc", func() { d.cancel() })
+	}
 	d.keymap(func(ev *tcell.EventKey) bool {
 		if p.confirmLoad != nil {
 			return ev.Key() != tcell.KeyEnter && ev.Key() != tcell.KeyTab && ev.Key() != tcell.KeyBacktab
 		}
 		if isEditing(u.app.GetFocus()) {
 			return false
-		}
-		if ev.Key() == tcell.KeyF4 && !full {
-			u.payloadDialog(true, records, p.modeName)
-			return true
 		}
 		key := shortcutRune(ev)
 		switch key {

@@ -45,8 +45,8 @@ func TestConsumeStartsAtExactOffsetFromFilter(t *testing.T) {
 		input, ok := u.app.GetFocus().(*tview.InputField)
 		return ok && input.GetText() == "sec"
 	})
-	key(tcell.KeyRune, 'g', tcell.ModAlt)
-	waitKeyboardState(t, u, "Alt+G from the value filter did not read offset 1", func() bool {
+	key(tcell.KeyRune, 'c', tcell.ModAlt)
+	waitKeyboardState(t, u, "Alt+C from the value filter did not read offset 1", func() bool {
 		return u.modalDepth == 0 && u.workspace == 2 && len(u.records) == 1 &&
 			u.records[0].id.offset == 1 && u.readOptions.value == "sec" && u.readOptions.start == startOffset
 	})

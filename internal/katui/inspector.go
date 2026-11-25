@@ -54,8 +54,9 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 	p.viewer = newPayloadText(p.copyText)
 	p.nodeView = newPayloadText(p.copyText)
 	p.viewer.modeChanged, p.nodeView.modeChanged = p.updateNavigation, p.updateNavigation
-	p.updateNavigation()
 	p.tree = tview.NewTreeView()
+	p.tree.SetFocusFunc(p.updateNavigation)
+	p.updateNavigation()
 	p.mode = tview.NewButton("").SetSelectedFunc(p.chooseFormat)
 	p.delimButton = tview.NewButton(buttonLabel("Delimiter", "d")).SetSelectedFunc(p.delimiterDialog)
 	p.headerButton = tview.NewButton(buttonLabel("Header", "h")).SetSelectedFunc(p.toggleHeader)
@@ -117,15 +118,28 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 
 func (p *payloadPane) updateNavigation() {
 	k := keyHint
-	if p.viewer.HasFocus() && p.viewer.selecting || p.nodeView.HasFocus() && p.nodeView.selecting {
-		if p == p.u.inspector && p.u.followLatest {
-			p.u.followLatest = false
-			p.u.say("Follow latest paused for selection. Press f to resume.")
-		}
-		p.navigation.SetText("Selection · " + k("Arrows") + " Extend  " + k("Ctrl+C") + " Copy\n" + k("Space") + " / " + k("Esc") + " Exit selection")
+	if p.tree.HasFocus() {
+		p.navigation.SetText("Tree · " + k("←/→") + " Collapse/expand  " + k("Tab") + " Node text")
 		return
 	}
-	p.navigation.SetText(k("Arrows") + " Scroll  " + k("Space") + " Select text\n" + k("Ctrl+←/→") + " Pan half  " + k("PgUp/PgDn") + " Page")
+	mode := payloadScroll
+	if p.viewer.HasFocus() {
+		mode = p.viewer.mode
+	} else if p.nodeView.HasFocus() {
+		mode = p.nodeView.mode
+	}
+	if mode != payloadScroll && p == p.u.inspector && p.u.followLatest {
+		p.u.followLatest = false
+		p.u.say("Follow latest paused to inspect this record. Press f to resume.")
+	}
+	line := "Scroll · " + k("Arrows") + " Scroll  " + k("Space") + " Cursor"
+	switch mode {
+	case payloadCursor:
+		line = "Cursor · " + k("Arrows") + " Move  " + k("v") + " Select"
+	case payloadSelection:
+		line = "Selection · " + k("Arrows") + " Extend  " + k("v") + " Cursor"
+	}
+	p.navigation.SetText(line + "  " + k("y") + " Yank\n" + k("Alt+←/→") + " Pan 8  " + k("Ctrl+←/→") + " Pan half  " + k("Esc") + " Back")
 }
 func (p *payloadPane) rebuild() {
 	p.mode.SetLabel(buttonLabel("Format", "m") + " · " + modeLabels[indexOf(modes, p.modeName)])
@@ -372,7 +386,7 @@ func (p *payloadPane) refresh() {
 			}
 			if notice == "" && p.dialog == nil {
 				k := keyHint
-				notice = k("y") + " Value · " + k("v") + " View · " + k("s") + " Save · " + k("F4") + " Full"
+				notice = k(":") + " Copy actions · " + k("s") + " Save · " + k("z") + " Fullscreen"
 			}
 			p.status.SetText(notice)
 			if p.dialog != nil && result.warning != "" {
@@ -703,10 +717,6 @@ func (p *payloadPane) shortcut(key rune) bool {
 			return false
 		}
 		p.editProfile(false)
-	case 'y':
-		p.copyValue()
-	case 'v':
-		p.copyView()
 	case 's', 'E':
 		p.exportValue()
 	case 'l', 'L':

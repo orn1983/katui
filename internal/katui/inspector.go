@@ -441,7 +441,7 @@ func (p *payloadPane) startRender() {
 		preferences[topic] = p.u.profile(topic)
 	}
 	mode := p.modeName
-	limits := p.u.b.inspectionLimits(p.expanded)
+	limits := p.u.b.inspectionLimits(p.full, p.expanded)
 	release := p.u.holdPayloads(records)
 	p.rendering = true
 	p.updateLoadButton()
@@ -541,7 +541,7 @@ func (p *payloadPane) showNode(n *payloadNode) {
 	p.nodeView.setDocument(payloadDocument{})
 	ctx, cancel := context.WithCancel(p.u.ctx)
 	p.nodeCancel = cancel
-	limit := p.u.b.inspectionLimits(p.expanded).rendered
+	limit := p.u.b.inspectionLimits(p.full, p.expanded).rendered
 	go func() {
 		defer cancel()
 		raw, err := json.Marshal(n.value)
@@ -590,7 +590,7 @@ func (p *payloadPane) canLoadFull() bool {
 	if !p.full || p.rendering {
 		return false
 	}
-	limits := p.u.b.inspectionLimits(false)
+	limits := p.u.b.inspectionLimits(p.full, false)
 	canRaiseLimits := limits.structured < maxInspectionBytes || limits.rendered < maxInspectionBytes
 	return p.result.canExpand && !p.expanded && canRaiseLimits
 }

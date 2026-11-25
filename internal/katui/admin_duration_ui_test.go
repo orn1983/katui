@@ -13,10 +13,10 @@ func TestTopicDurationEditor(t *testing.T) {
 	const topic, setting = "durations", "retention.ms"
 	cluster := kfake.MustCluster(kfake.NumBrokers(1))
 	t.Cleanup(cluster.Close)
-	u, screen, _ := startClusterUI(t, nil, "-b", cluster.ListenAddrs()[0], "-i", "0.2")
-	u.post(func() { screen.SetSize(140, 40) })
-	key := func(r rune) { clusterKey(t, screen, tcell.KeyRune, r, 0) }
-	alt := func(r rune) { clusterKey(t, screen, tcell.KeyRune, r, tcell.ModAlt) }
+	u, screen, _ := startClusterUI(t, nil, "-b", cluster.ListenAddrs()[0])
+	u.post(func() { screen.SetSize(80, 32) })
+	key := func(r rune) { screen.InjectKey(tcell.KeyRune, r, 0) }
+	alt := func(r rune) { screen.InjectKey(tcell.KeyRune, r, tcell.ModAlt) }
 
 	setField := func(label, text string) {
 		t.Helper()
@@ -50,12 +50,24 @@ func TestTopicDurationEditor(t *testing.T) {
 	reviewAndApply := func(operation, raw string, descriptions ...string) {
 		t.Helper()
 		alt('s')
+		visible("Staged "+setting+". Alt+R to review.", true)
+		if info := cluster.TopicInfo(topic); (operation == opCreate && info != nil) ||
+			(operation == opConfig && (info == nil || info.Configs[setting] == nil || *info.Configs[setting] == raw)) {
+			t.Fatal("staging changed the topic before review")
+		}
 		alt('r')
 		visible("Review · "+operation, true)
+		visible("Apply Alt+A", true)
 		for _, description := range descriptions {
 			visible(description, true)
 		}
-		setField("Exact target name", topic)
+		setField("Exact target name", strings.TrimSuffix(topic, "s"))
+		alt('a') // An incomplete target must leave the confirmation editable.
+		key('s')
+		waitKeyboardState(t, u, "confirmation lost focus or swallowed the final letter", func() bool {
+			field, ok := u.app.GetFocus().(*tview.InputField)
+			return ok && field.GetText() == topic
+		})
 		alt('a')
 		visible("Kafka accepted "+strings.ToLower(operation), true)
 		if info := cluster.TopicInfo(topic); info == nil || info.Configs[setting] == nil || *info.Configs[setting] != raw {
@@ -65,7 +77,19 @@ func TestTopicDurationEditor(t *testing.T) {
 	}
 
 	key('n')
-	setField("Name", topic)
+	visible("Stage Alt+S", true)
+	visible("Unstage Alt+U", true)
+	visible("Review Alt+R", true)
+	visible("Alt+D", false)
+	for _, letter := range topic {
+		key(letter)
+	}
+	waitKeyboardState(t, u, "typing the topic name activated a shortcut", func() bool {
+		field, ok := u.app.GetFocus().(*tview.InputField)
+		return ok && field.GetText() == topic
+	})
+	alt('f')
+	setField("Replicas", "1")
 	alt('k')
 	setField("Setting key", setting)
 	visible("1mo = 30d", true)
@@ -86,8 +110,23 @@ func TestTopicDurationEditor(t *testing.T) {
 	// Open the same editor directly so the test does not depend on the
 	// independently cached topic list picking up the new topic.
 	u.post(func() { u.topicForm(topic, opConfig) })
-	alt('/')
-	setField("Settings", setting)
+	visible("Alt+D", true)
+	visible("Filter settings Alt+F", true)
+	alt('v')
+	setField("Setting value", "draft")
+	alt('f')
+	for _, letter := range setting {
+		key(letter)
+	}
+	waitKeyboardState(t, u, "typed filter did not reach the settings search", func() bool {
+		field, ok := u.app.GetFocus().(*tview.InputField)
+		return ok && strings.HasPrefix(field.GetLabel(), "Filter settings") && field.GetText() == setting
+	})
+	alt('v')
+	waitKeyboardState(t, u, "filtering changed the draft setting value", func() bool {
+		field, ok := u.app.GetFocus().(*tview.InputField)
+		return ok && field.GetText() == "draft"
+	})
 	alt('b')
 	waitKeyboardState(t, u, "saved duration or raw value missing from the settings table", func() bool {
 		table, ok := u.app.GetFocus().(*tview.Table)
@@ -110,6 +149,18 @@ func TestTopicDurationEditor(t *testing.T) {
 		raw, err := configValue(setting, field.GetText())
 		return err == nil && raw == "3931200000"
 	})
+	alt('d')
+	visible(setting+" → inherit broker default", true)
+	alt('b')
+	key('u') // Browsing settings must not discard a staged change.
+	alt('v')
+	waitKeyboardState(t, u, "Alt+V did not return to the value field", func() bool {
+		field, ok := u.app.GetFocus().(*tview.InputField)
+		return ok && strings.HasPrefix(field.GetLabel(), "Setting value")
+	})
+	visible(setting+" → inherit broker default", true)
+	alt('u')
+	visible("No staged changes", true)
 	setField("Setting value", "1.2d")
 	visible("103680000 ms", true)
 	reviewAndApply(opConfig, "103680000", "3931200000 ms", "1.2d", "103680000 ms")

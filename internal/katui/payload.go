@@ -23,13 +23,15 @@ var modes = []string{"raw", "pretty", "tree", "csv-table", "csv-pivot", "proto-p
 var modeLabels = []string{"Raw", "JSON formatted text", "JSON tree", "CSV table", "CSV pivot", "Protobuf JSON", "Protobuf tree"}
 
 const (
-	maxRenderedPayload = 8 << 20
-	maxStructuredInput = 2 << 20
-	maxFullTreeNodes   = 50_000
-	maxFullTreeDepth   = 128
-	maxFullCSVRows     = 50_000
-	maxFullCSVColumns  = 256
-	maxInspectionBytes = 128 << 20
+	defaultRenderedOutput  = 32 << 20
+	defaultStructuredInput = 8 << 20
+	maxPreviewOutput       = 8 << 20
+	maxPreviewInput        = 2 << 20
+	maxFullTreeNodes       = 50_000
+	maxFullTreeDepth       = 128
+	maxFullCSVRows         = 50_000
+	maxFullCSVColumns      = 256
+	maxInspectionBytes     = 128 << 20
 )
 
 func validMode(mode string) bool {
@@ -562,16 +564,20 @@ type payloadLimits struct {
 	structured, rendered int
 }
 
-func (o options) inspectionLimits(override bool) payloadLimits {
-	if override {
+func (o options) inspectionLimits(full, expanded bool) payloadLimits {
+	if full && expanded {
 		return payloadLimits{maxInspectionBytes, maxInspectionBytes}
 	}
 	limits := payloadLimits{o.structuredInput, o.renderedOutput}
 	if limits.structured == 0 {
-		limits.structured = maxStructuredInput
+		limits.structured = defaultStructuredInput
 	}
 	if limits.rendered == 0 {
-		limits.rendered = maxRenderedPayload
+		limits.rendered = defaultRenderedOutput
+	}
+	if !full {
+		limits.structured = min(limits.structured, maxPreviewInput)
+		limits.rendered = min(limits.rendered, maxPreviewOutput)
 	}
 	return limits
 }

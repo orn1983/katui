@@ -230,14 +230,38 @@ func TestReaderBuffersBehindModalAndRestoresInspectorFocus(t *testing.T) {
 		u.palette()
 		u.buffer(next)
 		u.readerViewDirty.Store(true)
+		screen.SetSize(120, 36)
 	})
-	waitKeyboardState(t, u, "background reader redrew the hidden inspector", func() bool {
-		return u.modalDepth == 1 && !u.readerViewDirty.Load() && u.pinned == first && len(u.records) == 2
+	waitKeyboardState(t, u, "resize or an arriving record redrew the hidden inspector", func() bool {
+		return u.width == 120 && !u.resizePending.Load() && u.modalDepth == 1 && !u.readerViewDirty.Load() && u.pinned == first && len(u.records) == 2
 	})
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
 	waitKeyboardState(t, u, "closing Help did not focus the latest record's tree", func() bool {
 		return u.modalDepth == 0 && u.pinned == next && u.inspector.showingTree() && u.inspector.tree.HasFocus()
 	})
+
+	// A new record can arrive just before a resize, between reader refreshes.
+	// Replacing a focused tree during the draw itself would deadlock tview.
+	last := retainedRecord(t, nil, []byte(`{"last":3}`))
+	last.id.offset = 2
+	ready := make(chan struct{}, 1)
+	u.post(func() {
+		u.buffer(last)
+		screen.SetSize(80, 28)
+		u.app.SetAfterDrawFunc(func(tcell.Screen) {
+			if u.width == 80 && u.pinned == last && u.inspector.showingTree() && u.inspector.tree.HasFocus() {
+				select {
+				case ready <- struct{}{}:
+				default:
+				}
+			}
+		})
+	})
+	select {
+	case <-ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("resizing the focused inspector blocked the UI or lost tree focus")
+	}
 }
 
 func TestNestedPayloadDialogRestoresCurrentFormat(t *testing.T) {

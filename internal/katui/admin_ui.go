@@ -15,25 +15,35 @@ import (
 func (u *ui) topicForm(topic, initial string) {
 	form := tview.NewForm().SetItemPadding(0)
 	operations := []string{opConfig, opDeleteTopic}
+	labels := []string{opConfig, opDeleteTopic + " (permanent)"}
 	if initial == opCreate {
 		operations = []string{opCreate}
+		labels = operations
 	}
-	var d *dialog
-	var render func()
-	op := dropdown(form, buttonLabel("Operation", "Alt+O"), operations, indexOf(operations, initial), func(int) {
-		if render != nil {
-			render()
-		}
+	operation := initial
+	op := dropdown(form, buttonLabel("Operation", "Alt+O"), labels, indexOf(operations, initial), nil)
+	cursor := tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(tcell.ColorWhite).Bold(true).Underline(true)
+	op.SetListStyles(tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorBlack), cursor)
+	// tview keeps the last highlighted row after dismissing its list. Restore
+	// the committed choice when the field regains focus, including mouse dismissal.
+	op.SetFocusFunc(func() {
+		i, _ := op.GetCurrentOption()
+		op.SetCurrentOption(i)
 	})
-	name := field(form, buttonLabel("Name", "Alt+N"), topic)
-	name.SetDisabled(initial != opCreate)
-	partitions := field(form, buttonLabel("Partitions", "Alt+P"), "1")
-	replicas := field(form, buttonLabel("Replicas", "Alt+F"), "1")
-	partitions.SetDisabled(initial != opCreate)
-	replicas.SetDisabled(initial != opCreate)
+	createField := func(label, shortcut, text string) *tview.InputField {
+		if initial != opCreate {
+			shortcut = ""
+		}
+		input := field(form, buttonLabel(label, shortcut), text)
+		input.SetDisabled(initial != opCreate)
+		return input
+	}
+	name := createField("Name", "Alt+N", topic)
+	partitions := createField("Partitions", "Alt+P", "1")
+	replicas := createField("Replicas", "Alt+F", "1")
 	key := field(form, buttonLabel("Setting key", "Alt+K"), "")
 	value := field(form, buttonLabel("Setting value", "Alt+V"), "")
-	search := tview.NewInputField().SetLabel(buttonLabel("Settings", "Alt+/") + " ")
+	search := tview.NewInputField().SetLabel(buttonLabel("Filter settings", "Alt+F") + " ")
 	table := tview.NewTable().SetFixed(1, 0).SetSelectable(true, false)
 	table.SetBorder(true).SetTitle(" " + buttonLabel("Current settings", "Alt+B") + " ")
 	stagedText := tview.NewTextView().SetScrollable(true).SetWrap(false)
@@ -46,7 +56,6 @@ func (u *ui) topicForm(topic, initial string) {
 	content := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(body, 0, 1, true)
 	durationHelp := tview.NewTextView().SetWordWrap(true)
 	updateDurationHelp := func() {
-		_, operation := op.GetCurrentOption()
 		k := strings.TrimSpace(key.GetText())
 		if operation == opDeleteTopic || !strings.HasSuffix(k, ".ms") {
 			content.RemoveItem(durationHelp)
@@ -68,7 +77,7 @@ func (u *ui) topicForm(topic, initial string) {
 	}
 	key.SetChangedFunc(func(string) { updateDurationHelp() })
 	value.SetChangedFunc(func(string) { updateDurationHelp() })
-	d = u.dialog(initial, content, form)
+	d := u.dialog(initial, content, form)
 	d.focusables = []tview.Primitive{form, search, table, stagedText}
 	settings := map[string]setting{}
 	staged := map[string]*string{}
@@ -159,13 +168,16 @@ func (u *ui) topicForm(topic, initial string) {
 	stagedText.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey { return u.viewerKeys(e, nil, stagedText) })
 	busy := false
 	stage := func(remove bool) {
-		_, operation := op.GetCurrentOption()
 		if busy || operation == opDeleteTopic {
 			return
 		}
 		k := strings.TrimSpace(key.GetText())
 		if k == "" {
-			d.say("Enter a configuration key")
+			if operation == opConfig {
+				d.say("Press Enter on a setting to edit it, or type a setting key.")
+			} else {
+				d.say("Enter a setting key and value to stage.")
+			}
 			return
 		}
 		if operation == opConfig {
@@ -175,11 +187,7 @@ func (u *ui) topicForm(topic, initial string) {
 			}
 		}
 		if remove {
-			if operation == opCreate {
-				delete(staged, k)
-			} else {
-				staged[k] = nil
-			}
+			staged[k] = nil
 		} else {
 			v, err := configValue(k, value.GetText())
 			if err != nil {
@@ -189,7 +197,7 @@ func (u *ui) topicForm(topic, initial string) {
 			staged[k] = ptr(v)
 		}
 		updateStaged()
-		d.say(fmt.Sprintf("%d staged settings", len(staged)))
+		d.say("Staged " + k + ". Alt+R to review.")
 	}
 	unstage := func() { delete(staged, strings.TrimSpace(key.GetText())); updateStaged() }
 	var reviewButton *tview.Button
@@ -197,7 +205,6 @@ func (u *ui) topicForm(topic, initial string) {
 		if busy || d.closed {
 			return
 		}
-		_, operation := op.GetCurrentOption()
 		in := adminInput{operation: operation, target: name.GetText(), settings: maps.Clone(staged)}
 		if operation == opCreate {
 			p, e := strconv.ParseInt(partitions.GetText(), 10, 32)
@@ -209,18 +216,32 @@ func (u *ui) topicForm(topic, initial string) {
 			in.partitions = int32(p)
 			in.replicas = int16(r)
 		}
-		u.prepareReview(d, in, &busy, reviewButton)
+		u.prepareReview(d, in, &busy, reviewButton, op)
 	}
-	d.button("Stage", "s", func() { stage(false) })
-	d.button("Default", "d", func() { stage(true) })
-	d.button("Unstage", "u", unstage)
-	reviewButton = d.button("Review", "r", review)
+	d.button("Stage", "Alt+S", func() { stage(false) })
+	if initial != opCreate {
+		d.button("Default", "Alt+D", func() { stage(true) })
+	}
+	d.button("Unstage", "Alt+U", unstage)
+	settingButtons := d.buttons
+	reviewButton = d.button("Review", "Alt+R", review)
 	d.button("Cancel", "Esc", d.close)
-	render = func() {
-		_, operation := op.GetCurrentOption()
+	render := func() {
+		title := operation
+		if topic != "" {
+			title += " · " + topic
+		}
+		d.root.SetTitle(" " + tview.Escape(safe(title, false)) + " ").SetBorderColor(u.accent)
 		edit := operation != opDeleteTopic
 		key.SetDisabled(!edit)
 		value.SetDisabled(!edit)
+		if edit {
+			key.SetLabel(buttonLabel("Setting key", "Alt+K"))
+			value.SetLabel(buttonLabel("Setting value", "Alt+V"))
+		} else {
+			key.SetLabel("Setting key")
+			value.SetLabel("Setting value")
+		}
 		updateDurationHelp()
 		body.Clear().AddItem(form, 0, 1, true)
 		side.Clear()
@@ -232,15 +253,24 @@ func (u *ui) topicForm(topic, initial string) {
 			body.AddItem(stagedText, 0, 1, false)
 			d.focusables = []tview.Primitive{form, stagedText}
 		} else {
+			d.root.SetBorderColor(tcell.ColorLightCoral)
+			notice := tview.NewTextView().SetWordWrap(true).SetTextColor(tcell.ColorLightCoral).
+				SetText("Deleting this topic permanently removes its records. Choose Review to inspect the deletion.")
+			body.AddItem(notice, 0, 1, false)
 			d.focusables = []tview.Primitive{form}
 		}
-		for i := 0; i < 3; i++ {
-			d.buttons[i].SetDisabled(!edit)
+		for _, button := range settingButtons {
+			button.SetDisabled(!edit)
 		}
 		updateStaged()
 	}
+	op.SetSelectedFunc(func(_ string, i int) {
+		if next := operations[i]; next != operation {
+			operation = next
+			render()
+		}
+	})
 	d.keymap(func(e *tcell.EventKey) bool {
-		_, operation := op.GetCurrentOption()
 		switch alt(e) {
 		case 'o':
 			focusForm(u, form, 0)
@@ -255,9 +285,7 @@ func (u *ui) topicForm(topic, initial string) {
 		case 'f':
 			if operation == opCreate {
 				focusForm(u, form, 3)
-			}
-		case '/':
-			if operation == opConfig {
+			} else if operation == opConfig {
 				u.app.SetFocus(search)
 			}
 		case 'b':
@@ -272,8 +300,6 @@ func (u *ui) topicForm(topic, initial string) {
 			if operation != opDeleteTopic {
 				focusForm(u, form, 5)
 			}
-		case 'g':
-			review()
 		default:
 			return false
 		}
@@ -343,7 +369,7 @@ func (u *ui) groupForm(group, scope, topic string, partition int32) {
 			d.say("Select at least one committed partition")
 			return
 		}
-		u.prepareReview(d, in, &busy, reviewButton)
+		u.prepareReview(d, in, &busy, reviewButton, op)
 	}
 	all := d.button("All", "a", func() { selector.every(true) })
 	none := d.button("None", "n", func() { selector.every(false) })
@@ -422,7 +448,8 @@ func (u *ui) groupForm(group, scope, topic string, partition int32) {
 	}()
 }
 
-func (u *ui) prepareReview(d *dialog, in adminInput, busy *bool, button *tview.Button) {
+func (u *ui) prepareReview(d *dialog, in adminInput, busy *bool, button *tview.Button, op *tview.DropDown) {
+	reviewed, _ := op.GetCurrentOption()
 	*busy = true
 	button.SetDisabled(true)
 	d.say("Validating and preparing a read-only review…")
@@ -436,6 +463,10 @@ func (u *ui) prepareReview(d *dialog, in adminInput, busy *bool, button *tview.B
 			}
 			*busy = false
 			button.SetDisabled(false)
+			if current, _ := op.GetCurrentOption(); current != reviewed || op.IsOpen() {
+				d.say("Choose Review again for the selected operation.")
+				return
+			}
 			if err != nil {
 				d.say(err.Error())
 				return
@@ -452,7 +483,12 @@ func (u *ui) adminReview(plan adminPlan) {
 	body := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(preview, 0, 1, false).AddItem(confirmation, 1, 0, true)
 	d := u.dialog("Review · "+plan.operation, body, confirmation)
 	d.focusables = []tview.Primitive{confirmation, preview}
-	d.say("Type the exact target name, then choose Apply. One attempt is allowed.")
+	action := "Apply"
+	if plan.operation == opDeleteTopic {
+		action = opDeleteTopic
+		d.root.SetBorderColor(tcell.ColorLightCoral)
+	}
+	d.say("Type the exact target name, then choose " + action + ". One attempt is allowed.")
 	var applyButton, cancelButton *tview.Button
 	attempted, inFlight := false, false
 	apply := func() {
@@ -507,7 +543,7 @@ func (u *ui) adminReview(plan adminPlan) {
 			d.close()
 		}
 	}
-	applyButton = d.button("Apply", "a", apply).SetDisabled(true)
+	applyButton = d.button(action, "Alt+A", apply).SetDisabled(true)
 	cancelButton = d.button("Cancel", "Esc", d.cancel)
 	confirmation.SetChangedFunc(func(value string) {
 		if !attempted {

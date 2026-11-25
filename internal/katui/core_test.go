@@ -72,7 +72,7 @@ func TestConfigDurationExact(t *testing.T) {
 }
 
 func TestCSVAndFullTree(t *testing.T) {
-	d, warnings, err := parseCSV(context.Background(), "id;値;empty\n1;\"a\nb\";\n2;b\n", profile{delimiter: ";", header: true}, false, 200, maxRenderedPayload)
+	d, warnings, err := parseCSV(context.Background(), "id;値;empty\n1;\"a\nb\";\n2;b\n", profile{delimiter: ";", header: true}, false, 200, maxPreviewOutput)
 	if err != nil || len(warnings) != 0 {
 		t.Fatalf("CSV warnings=%v err=%v", warnings, err)
 	}

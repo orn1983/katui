@@ -22,16 +22,17 @@ type location struct {
 	sort, row, top, horizontal           int
 }
 type tableRow struct {
-	id           string
-	cells        []string
-	alertColor   tcell.Color
-	topic, group string
-	partition    int32
-	record       *storedRecord
-	checked      bool
-	rankInteger  int64
-	rank         float64
-	order        int
+	id              string
+	cells           []string
+	cell            *tview.TableCell
+	alertColor      tcell.Color
+	topic, group    string
+	partition       int32
+	record          *storedRecord
+	checked, pinned bool
+	rankInteger     int64
+	rank            float64
+	order           int
 }
 
 const clustersWorkspace = 3
@@ -60,6 +61,7 @@ type ui struct {
 	modalID, modalDepth            int
 	tableZoom                      bool
 	width, height                  int
+	resizePending                  atomic.Bool
 	accent                         tcell.Color
 	message                        string
 	interrupted                    bool
@@ -179,7 +181,12 @@ func (u *ui) run() error {
 	u.controls = tview.NewTextView().SetDynamicColors(true).SetWordWrap(true)
 	u.status = tview.NewTextView().SetDynamicColors(true).SetTextColor(tcell.ColorSilver).SetWrap(false)
 	u.search = tview.NewInputField().SetLabel(buttonLabel("Search", "/") + "  ")
-	u.search.SetChangedFunc(func(value string) { u.current().filter = value; u.refreshView() })
+	u.search.SetChangedFunc(func(value string) {
+		if loc := u.current(); loc.filter != value {
+			loc.filter = value
+			u.refreshView()
+		}
+	})
 	u.search.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter || key == tcell.KeyEscape {
 			u.focus(u.mainPane())
@@ -215,7 +222,11 @@ func (u *ui) run() error {
 			u.width = w
 			u.height = h
 			u.layout = ""
-			u.refreshView()
+			// tview holds its application lock during drawing. Refreshing a
+			// selected record can move keyboard focus and needs that lock.
+			if !u.resizePending.Swap(true) {
+				_ = screen.PostEvent(u.updateEvent)
+			}
 		}
 		return false
 	})
@@ -243,7 +254,7 @@ func (u *ui) heartbeat(screen tcell.Screen) {
 		case <-ticker.C:
 		}
 		watchDue := u.nextWatchTick.Load()
-		if u.ctx.Err() != nil || u.monitoring.Load() || u.readerViewDirty.Load() || len(u.updates) > 0 ||
+		if u.ctx.Err() != nil || u.monitoring.Load() || u.readerViewDirty.Load() || u.resizePending.Load() || len(u.updates) > 0 ||
 			watchDue != 0 && time.Now().UnixNano() >= watchDue {
 			_ = screen.PostEvent(u.updateEvent)
 		}
@@ -294,12 +305,13 @@ func (u *ui) applyUpdates() {
 		update()
 	}
 	u.poll()
+	resized := u.resizePending.Swap(false)
 	// The last dialog to close refreshes Messages from the current buffer.
 	if u.modalDepth > 0 {
 		u.readerViewDirty.Store(false)
 		return
 	}
-	if u.workspace == 2 && u.readerViewDirty.Load() &&
+	if resized || u.workspace == 2 && u.readerViewDirty.Load() &&
 		(u.readerState.state == "COMPLETE" || u.readerState.state == "ERROR" || !time.Now().Before(u.nextReaderRefresh)) {
 		u.refreshView()
 	}
@@ -862,7 +874,7 @@ func (u *ui) refreshView() {
 			continue
 		}
 		if i == u.workspace {
-			label = "[black:" + u.accent.String() + ":b] " + label + " [-:-:-]"
+			label = "[black:" + u.accent.String() + ":b]" + label + "[-:-:-]"
 		}
 		labels = append(labels, keyHint(strconv.Itoa(i+1))+" "+label)
 	}
@@ -955,20 +967,10 @@ func (u *ui) renderTable(header []string, width []int, rows []tableRow) {
 	row = max(0, min(len(rows)-1, row))
 	u.updatingTable = true
 	top, _ := u.table.GetOffset()
-	u.table.Clear()
-	u.table.SetCell(0, 0, browserCell(header, width, loc.horizontal).SetTextColor(u.accent).SetSelectable(false))
-	for i, r := range rows {
-		cell := browserCell(r.cells, width, loc.horizontal)
-		if r.alertColor != tcell.ColorDefault {
-			cell.SetTextColor(r.alertColor)
-			cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(r.alertColor).Bold(true))
-		}
-		if r.checked {
-			cell.SetBackgroundColor(tcell.ColorDarkSlateGray)
-			cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(u.accent).Bold(true).Underline(true))
-		}
-		u.table.SetCell(i+1, 0, cell)
-	}
+	u.table.SetContent(&browserTableContent{
+		header: browserCell(header, width, loc.horizontal).SetTextColor(u.accent).SetSelectable(false),
+		rows:   rows, widths: width, skip: loc.horizontal, accent: u.accent,
+	})
 	u.rows = rows
 	if len(rows) > 0 {
 		loc.selected = rows[row].id
@@ -986,6 +988,47 @@ func (u *ui) renderTable(header []string, width []int, rows []tableRow) {
 		}
 	}
 	u.updatingTable = false
+}
+
+// tview requests visible rows (and the selection) as it draws or scrolls.
+// Keep cells within this snapshot so a live refresh cannot reuse stale styles.
+type browserTableContent struct {
+	tview.TableContentReadOnly
+	header *tview.TableCell
+	rows   []tableRow
+	widths []int
+	skip   int
+	accent tcell.Color
+}
+
+func (c *browserTableContent) GetRowCount() int    { return 1 + len(c.rows) }
+func (c *browserTableContent) GetColumnCount() int { return 1 }
+func (c *browserTableContent) GetCell(row, column int) *tview.TableCell {
+	if column != 0 || row < 0 || row > len(c.rows) {
+		return nil
+	}
+	if row == 0 {
+		return c.header
+	}
+	r := &c.rows[row-1]
+	if r.cell != nil {
+		return r.cell
+	}
+	values := r.cells
+	if r.record != nil {
+		values = r.record.listCells(r.checked, r.pinned)
+	}
+	cell := browserCell(values, c.widths, c.skip)
+	if r.alertColor != tcell.ColorDefault {
+		cell.SetTextColor(r.alertColor)
+		cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(r.alertColor).Bold(true))
+	}
+	if r.checked {
+		cell.SetBackgroundColor(tcell.ColorDarkSlateGray)
+		cell.SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(c.accent).Bold(true).Underline(true))
+	}
+	r.cell = cell
+	return cell
 }
 
 // Browser rows use a fixed display width for each column. A single table

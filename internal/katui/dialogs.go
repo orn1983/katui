@@ -37,8 +37,9 @@ func (p *modalPage) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, fu
 }
 
 type dialogAction struct {
-	button *tview.Button
-	run    func()
+	button  *tview.Button
+	run     func()
+	altOnly bool
 }
 
 func (u *ui) newDialog(title string, body tview.Primitive) *dialog {
@@ -143,11 +144,15 @@ func (d *dialog) button(label, key string, action func()) *tview.Button {
 	b := tview.NewButton(buttonLabel(label, key)).SetSelectedFunc(action)
 	d.buttons = append(d.buttons, b)
 	d.footer.AddItem(b, tview.TaggedStringWidth(b.GetLabel())+2, 0, false)
+	key, altOnly := strings.CutPrefix(key, "Alt+")
 	if len(key) == 1 {
 		if d.actions == nil {
 			d.actions = map[rune]dialogAction{}
 		}
-		d.actions[rune(key[0])] = dialogAction{b, action}
+		if altOnly {
+			key = strings.ToLower(key)
+		}
+		d.actions[rune(key[0])] = dialogAction{button: b, run: action, altOnly: altOnly}
 	}
 	return b
 }
@@ -196,7 +201,7 @@ func (d *dialog) keymap(handle func(*tcell.EventKey) bool) {
 		if handle != nil && handle(event) {
 			return nil
 		}
-		if action, ok := d.actions[d.actionKey(event)]; ok {
+		if action, ok := d.actions[d.actionKey(event)]; ok && (!action.altOnly || alt(event) != 0) {
 			if !action.button.IsDisabled() {
 				action.run()
 			}
@@ -349,8 +354,10 @@ func (u *ui) help() {
 			k("h")+" Show internal / Hide internal  "+k("g")+" Topic consumers",
 			"ISR/Replicas totals in-sync and assigned replicas. Affected P counts partitions with a shortfall or missing leader. Yellow means one missing replica per affected partition. Red means a partition lacks a leader, has zero ISR, or is missing two or more replicas.",
 			k("n")+" Create topic  "+k("a")+" Manage  "+k("d")+" Delete topic",
+			"In topic forms, "+k("Alt+S")+" Stage  "+k("Alt+U")+" Unstage  "+k("Alt+D")+" Stage broker default (Configure only)",
+			"In Configure topic, "+k("Alt+F")+" filters settings and "+k("Alt+B")+" moves to the results.",
 			"Topic settings ending in .ms accept milliseconds or durations such as 1h30m, 1.2d or 6.5w. The value helper shows exact milliseconds. Use m for minutes and mo for 30-day months.",
-			k("r")+" Review changes. Type the exact target name, then press "+k("Enter")+" to focus Apply and "+k("Enter")+" again to apply. "+k("Alt+A")+" also applies.",
+			k("Alt+R")+" Review changes. Type the exact target name, then press "+k("Alt+A")+" to apply, or press "+k("Enter")+" to focus the confirmation button and "+k("Enter")+" again to activate it.",
 			"Review requires a Kafka cluster ID. Apply checks the cluster ID again before writing.",
 			"",
 			"Consume",

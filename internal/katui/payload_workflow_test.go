@@ -49,13 +49,13 @@ func TestLargePayloadOverrideAcrossFormats(t *testing.T) {
 	if err := os.WriteFile(schema, []byte(`syntax = "proto3"; message Record { string content = 1; }`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	u := newUI(t.Context(), &broker{})
+	u := newUI(t.Context(), &broker{options: options{structuredInput: 1 << 20, renderedOutput: 2 << 20}})
 	profiles := map[string]profile{"events": {delimiter: ",", header: true, Protobuf: &protoProfile{Path: schema, Message: "Record", Framing: "raw"}}}
 	for _, mode := range []string{"pretty", "tree", "csv-pivot", "csv-table", "proto-pretty", "proto-tree"} {
 		t.Run(mode, func(t *testing.T) {
-			size := maxStructuredInput + 1024
+			size := u.b.structuredInput + 1024
 			if mode == "pretty" {
-				size = maxRenderedPayload + 1024
+				size = u.b.renderedOutput + 1024
 			}
 			content := strings.Repeat("x", size) + marker
 			value := []byte(`{"content":"` + content + `"}`)
@@ -67,15 +67,15 @@ func TestLargePayloadOverrideAcrossFormats(t *testing.T) {
 			store := newPayloadStore(t.TempDir(), payloadQuota)
 			defer store.close()
 			records := []*storedRecord{retainedRecord(t, store, value)}
-			preview := u.preparePayload(t.Context(), records, profiles, mode, false, false, u.b.inspectionLimits(false))
+			preview := u.preparePayload(t.Context(), records, profiles, mode, false, false, u.b.inspectionLimits(false, false))
 			if !preview.incomplete || strings.Contains(preview.text, marker) {
 				t.Fatalf("ordinary preview did not truncate %s", mode)
 			}
-			full := u.preparePayload(t.Context(), records, profiles, mode, true, false, u.b.inspectionLimits(false))
+			full := u.preparePayload(t.Context(), records, profiles, mode, true, false, u.b.inspectionLimits(true, false))
 			if !full.incomplete || !full.canExpand || !strings.Contains(full.warning, "structured input exceeds") || full.tree != nil {
 				t.Fatalf("ordinary Full view accepted an oversized %s payload: %s", mode, full.warning)
 			}
-			load := u.preparePayload(t.Context(), records, profiles, mode, true, false, u.b.inspectionLimits(true))
+			load := u.preparePayload(t.Context(), records, profiles, mode, true, false, u.b.inspectionLimits(true, true))
 			if load.incomplete || !strings.Contains(load.text, marker) || !strings.Contains(load.text, "content") {
 				t.Fatalf("explicit load did not format the entire %s payload: %s", mode, load.warning)
 			}
@@ -86,17 +86,32 @@ func TestLargePayloadOverrideAcrossFormats(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if r := u.preparePayload(ctx, []*storedRecord{{value: []byte("{}")}}, profiles, "pretty", true, false, u.b.inspectionLimits(true)); r.text != "" {
+	if r := u.preparePayload(ctx, []*storedRecord{{value: []byte("{}")}}, profiles, "pretty", true, false, u.b.inspectionLimits(true, true)); r.text != "" {
 		t.Fatal("canceled render returned a payload")
 	}
 }
 
 func TestPayloadLimitsAreConfigurable(t *testing.T) {
+	defaults, err := arguments(nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []options{defaults, {}} {
+		if limits := o.inspectionLimits(true, false); limits != (payloadLimits{8 << 20, 32 << 20}) {
+			t.Fatalf("fullscreen defaults = %+v", limits)
+		}
+		if limits := o.inspectionLimits(false, false); limits != (payloadLimits{2 << 20, 8 << 20}) {
+			t.Fatalf("inline preview limits = %+v", limits)
+		}
+		if limits := o.inspectionLimits(true, true); limits != (payloadLimits{128 << 20, 128 << 20}) {
+			t.Fatalf("expanded fullscreen limits = %+v", limits)
+		}
+	}
 	o, err := arguments([]string{"--structured-input-mib", "6", "--rendered-output-mib", "12", "--payload-storage-mib", "0"}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.inspectionLimits(false) != (payloadLimits{6 << 20, 12 << 20}) || !o.payloadStorageSet || o.payloadStorage != 0 {
+	if o.inspectionLimits(true, false) != (payloadLimits{6 << 20, 12 << 20}) || !o.payloadStorageSet || o.payloadStorage != 0 {
 		t.Fatalf("unexpected configured limits %+v", o)
 	}
 	for _, args := range [][]string{
@@ -300,7 +315,7 @@ func TestFullViewSearchClearsObsoleteMatch(t *testing.T) {
 func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	b := &broker{options: options{brokers: []string{"localhost:1"}, noCache: true, interval: time.Second}}
+	b := &broker{options: options{brokers: []string{"localhost:1"}, noCache: true, interval: time.Second, structuredInput: 1 << 20, renderedOutput: 2 << 20}}
 	u := newUI(ctx, b)
 	u.workspace = 2
 	t.Setenv("SSH_CONNECTION", "test")
@@ -322,7 +337,7 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	store := newPayloadStore(t.TempDir(), payloadQuota)
 	defer store.close()
 	marker := "needle-after-preview"
-	record := retainedRecord(t, store, []byte(`{"content":"`+strings.Repeat("x", maxRenderedPayload+1024)+marker+`"}`))
+	record := retainedRecord(t, store, []byte(`{"content":"`+strings.Repeat("x", b.renderedOutput+1024)+marker+`"}`))
 	var p *payloadPane
 	if !u.post(func() {
 		p = u.payloadDialog(true, []*storedRecord{record}, "pretty")
@@ -395,7 +410,7 @@ func TestFullViewConfirmationSearchAndCopy(t *testing.T) {
 	})
 	u.post(func() { p.search.SetText(marker) })
 	waitFor("search did not jump past the old display boundary", func() bool {
-		return p.viewer.match[0] > maxRenderedPayload && p.viewer.left > maxRenderedPayload
+		return p.viewer.match[0] > b.renderedOutput && p.viewer.left > b.renderedOutput
 	})
 	u.post(func() {
 		p.focusViewer()

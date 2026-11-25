@@ -67,6 +67,8 @@ type storedRecord struct {
 	headerCount, valueSize, cost int
 	fullPath                     string
 	store                        *payloadStore
+	listFilter                   string
+	listMatch                    bool
 }
 
 func (r *storedRecord) fullAvailable() bool {
@@ -363,10 +365,6 @@ func (u *ui) consume(topic string, id int32) {
 		switch a := alt(e); a {
 		case 'p':
 			u.app.SetFocus(selector.list)
-		case 'c':
-			if !goBtn.IsDisabled() {
-				goRead()
-			}
 		default:
 			if item := fieldKeys[a]; item != nil {
 				focusForm(u, form, form.GetFormItemIndex(item.GetLabel()))

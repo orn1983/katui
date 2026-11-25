@@ -106,6 +106,44 @@ func (u *ui) pin(r *storedRecord) {
 	}
 	u.release(old)
 }
+
+func (r *storedRecord) matchesListFilter(filter string) bool {
+	if filter == "" {
+		return true
+	}
+	// Buffered keys and values are immutable. Only new records need scanning
+	// on a live refresh while the user keeps the same filter.
+	if r.listFilter != filter {
+		r.listFilter = filter
+		r.listMatch = strings.Contains(strings.ToLower(string(r.key)), filter) ||
+			strings.Contains(strings.ToLower(string(r.value)), filter)
+	}
+	return r.listMatch
+}
+
+func (r *storedRecord) listCells(checked, pinned bool) []string {
+	check := "[ ]"
+	if checked {
+		check = "[x]"
+	}
+	key := shortened(string(r.key), 100)
+	if r.key == nil {
+		key = "<null>"
+	} else if len(r.key) == 0 {
+		key = "<empty>"
+	}
+	value := shortened(string(r.value), 300)
+	if r.value == nil {
+		value = "<tombstone>"
+	} else if len(r.value) == 0 {
+		value = "<empty>"
+	}
+	if pinned {
+		value = shortened("(pinned) "+value, 300)
+	}
+	return []string{check, payloadAvailability(r), clock(r.timestamp), key, fmt.Sprint(r.id.Partition), integer(r.id.offset), value}
+}
+
 func (u *ui) recordRows() ([]string, []int, []tableRow) {
 	rows := make([]tableRow, 0, len(u.records))
 	filter := strings.ToLower(u.current().filter)
@@ -120,31 +158,10 @@ func (u *ui) recordRows() ([]string, []int, []tableRow) {
 		}
 	}
 	addRow := func(r *storedRecord, pinned bool) {
-		if filter != "" && !strings.Contains(strings.ToLower(string(r.key)), filter) && !strings.Contains(strings.ToLower(string(r.value)), filter) {
+		if !r.matchesListFilter(filter) {
 			return
 		}
-		check := "[ ]"
-		checked := u.isChecked(r.id) >= 0
-		if checked {
-			check = "[x]"
-		}
-		key, value := string(r.key), string(r.value)
-		if r.key == nil {
-			key = "<null>"
-		} else if len(r.key) == 0 {
-			key = "<empty>"
-		}
-		if r.value == nil {
-			value = "<tombstone>"
-		} else if len(r.value) == 0 {
-			value = "<empty>"
-		}
-		if pinned {
-			value = "(pinned) " + value
-		}
-		rows = append(rows, tableRow{id: r.id.String(), topic: r.id.Topic, partition: r.id.Partition, record: r, checked: checked, cells: []string{
-			check, payloadAvailability(r), clock(r.timestamp), shortened(key, 100), fmt.Sprint(r.id.Partition), integer(r.id.offset), shortened(value, 300),
-		}})
+		rows = append(rows, tableRow{id: r.id.String(), topic: r.id.Topic, partition: r.id.Partition, record: r, checked: u.isChecked(r.id) >= 0, pinned: pinned})
 	}
 	if pinnedOnly != nil {
 		addRow(pinnedOnly, true)

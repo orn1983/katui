@@ -72,6 +72,21 @@ func clusterKey(t *testing.T, screen tcell.Screen, key tcell.Key, char rune, mod
 	}
 }
 
+func expectWorkspaceBar(t *testing.T, u *ui, screen tcell.Screen, text, selected string) {
+	t.Helper()
+	waitKeyboardState(t, u, "workspace bar moved or lost its highlight on "+selected, func() bool {
+		for x, want := range text {
+			r, _, _, _ := screen.GetContent(x, 1)
+			if r != want {
+				return false
+			}
+		}
+		_, _, style, _ := screen.GetContent(strings.Index(text, selected), 1)
+		_, bg, _ := style.Decompose()
+		return bg == u.accent
+	})
+}
+
 func TestCLIGroupNavigation(t *testing.T) {
 	// An empty CLI group listing is sufficient to exercise the workspace.
 	command, err := exec.LookPath("true")
@@ -79,6 +94,12 @@ func TestCLIGroupNavigation(t *testing.T) {
 		t.Skip("requires the true utility")
 	}
 	u, screen, _ := startClusterUI(t, nil, "--backend", "cli", "--kafka-cli", command, "-b", "127.0.0.1:1")
+	const tabs = "2 Consumer Groups  4 Clusters"
+	expectWorkspaceBar(t, u, screen, tabs, "Consumer Groups")
+	clusterKey(t, screen, tcell.KeyRune, '4', 0)
+	expectWorkspaceBar(t, u, screen, tabs, "Clusters")
+	clusterKey(t, screen, tcell.KeyRune, '2', 0)
+	expectWorkspaceBar(t, u, screen, tabs, "Consumer Groups")
 	u.post(func() {
 		tabs := u.tabs.GetText(true)
 		if !strings.Contains(tabs, "Consumer Groups") || !strings.Contains(tabs, "Clusters") ||
@@ -159,23 +180,9 @@ func TestClustersWorkspaceKeepsNavigationVisible(t *testing.T) {
 		}
 		t.Fatalf("got workspace %d with %d dialogs, want workspace %d with %d dialogs", gotWorkspace, gotDepth, workspace, modalDepth)
 	}
-	checkBar := func() {
-		t.Helper()
-		cells, width, _ := screen.GetContents()
-		var row strings.Builder
-		for _, cell := range cells[width : 2*width] {
-			if len(cell.Runes) != 0 {
-				row.WriteRune(cell.Runes[0])
-			}
-		}
-		for _, label := range []string{"1 ", "Topics", "2 ", "Consumer Groups", "3 ", "Messages", "4 ", "Clusters"} {
-			if !strings.Contains(row.String(), label) {
-				t.Errorf("workspace bar is covered: %q", row.String())
-				break
-			}
-		}
-	}
+	const tabs = "1 Topics  2 Consumer Groups  3 Messages  4 Clusters"
 	waitFor(0, 0)
+	expectWorkspaceBar(t, u, screen, tabs, "Topics")
 	for i, key := range "123" {
 		clusterKey(t, screen, tcell.KeyRune, '4', 0)
 		waitFor(clustersWorkspace, 0)
@@ -185,10 +192,11 @@ func TestClustersWorkspaceKeepsNavigationVisible(t *testing.T) {
 			if pickerY < tabsY+tabsHeight {
 				t.Error("cluster list overlaps the workspace bar")
 			}
-			checkBar()
 		})
+		expectWorkspaceBar(t, u, screen, tabs, "Clusters")
 		clusterKey(t, screen, tcell.KeyRune, key, 0)
 		waitFor(i, 0)
+		expectWorkspaceBar(t, u, screen, tabs, []string{"Topics", "Consumer Groups", "Messages"}[i])
 		check(func() {
 			if u.clusters != nil {
 				t.Errorf("%c left the cluster list open", key)
@@ -198,7 +206,7 @@ func TestClustersWorkspaceKeepsNavigationVisible(t *testing.T) {
 	clusterKey(t, screen, tcell.KeyRune, '4', 0)
 	clusterKey(t, screen, tcell.KeyRune, 'e', 0)
 	waitFor(clustersWorkspace, 1)
-	check(checkBar)
+	expectWorkspaceBar(t, u, screen, tabs, "Clusters")
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
 	waitFor(clustersWorkspace, 0)
 	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
@@ -253,11 +261,9 @@ func TestSavedClusterQuickConnect(t *testing.T) {
 			}
 			clusterKey(t, screen, tcell.KeyRune, 'e', 0)
 			clusterKey(t, screen, tcell.KeyRune, 'n', tcell.ModAlt)
-			u.post(func() {
+			waitKeyboardState(t, u, "e and Alt+N did not focus the saved profile name", func() bool {
 				input, ok := u.app.GetFocus().(*tview.InputField)
-				if !ok || input.GetLabel() != buttonLabel("Profile name", "Alt+N") || input.GetText() != "Alpha" {
-					t.Error("e and Alt+N did not put focus on the profile-name field")
-				}
+				return ok && input.GetLabel() == buttonLabel("Profile name", "Alt+N") && input.GetText() == "Alpha"
 			})
 			clusterKey(t, screen, tcell.KeyEscape, 0, 0)
 			clusterKey(t, screen, tcell.KeyDown, 0, 0)

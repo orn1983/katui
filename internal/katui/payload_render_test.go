@@ -14,20 +14,21 @@ func TestJSONDisplayDepth(t *testing.T) {
 	nested := func(n int) []byte {
 		return []byte(strings.Repeat("[", n) + `"A quoted [bracket], a \" quote and a \\ slash"` + strings.Repeat("]", n))
 	}
-	if _, err := prettyJSON(t.Context(), nested(n), maxRenderedPayload); err != nil {
+	if _, err := prettyJSON(t.Context(), nested(n), 1<<20); err != nil {
 		t.Fatalf("formatting at the depth limit: %v", err)
 	}
-	if _, err := prettyJSON(t.Context(), nested(n+1), maxRenderedPayload); err == nil {
+	if _, err := prettyJSON(t.Context(), nested(n+1), 1<<20); err == nil {
 		t.Fatal("expected an error above the display depth limit")
 	}
 }
 
 func TestRenderTextKeepsUTF8AndHonorsBudget(t *testing.T) {
-	text := renderText{limit: maxRenderedPayload}
-	_, _ = text.WriteString(strings.Repeat("a", maxRenderedPayload-1))
+	const limit = 256
+	text := renderText{limit: limit}
+	_, _ = text.WriteString(strings.Repeat("a", limit-1))
 	_, _ = text.WriteString("☃")
 	_, _ = text.WriteString("x")
-	if !text.limited || len(text.String()) != maxRenderedPayload-1 || !utf8.ValidString(text.String()) {
+	if !text.limited || len(text.String()) != limit-1 || !utf8.ValidString(text.String()) {
 		t.Fatal("render output exceeded its budget or produced invalid UTF-8")
 	}
 }

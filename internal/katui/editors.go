@@ -58,8 +58,8 @@ func (p *payloadPane) csvEditor(topic string) {
 			return
 		}
 		go func() {
-			data, notices, err := parseCSV(context.Background(), string(record.value), updated, false, 5, maxRenderedPayload)
-			pivot, _ := csvPivot(context.Background(), data, maxRenderedPayload)
+			data, notices, err := parseCSV(context.Background(), string(record.value), updated, false, 5, maxPreviewOutput)
+			pivot, _ := csvPivot(context.Background(), data, maxPreviewOutput)
 			text := pivot + "\n" + strings.Join(notices, "\n")
 			if err != nil {
 				text = "CSV: " + err.Error()

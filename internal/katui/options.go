@@ -68,8 +68,8 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	}
 	flags.Float64Var(&timeout, "timeout", 20, "request timeout in seconds")
 	flags.Float64Var(&size, "size-interval", 30, "disk sampling interval in seconds")
-	flags.IntVar(&inputMiB, "structured-input-mib", maxStructuredInput>>20, "default structured payload input limit in MiB")
-	flags.IntVar(&outputMiB, "rendered-output-mib", maxRenderedPayload>>20, "default payload display limit in MiB")
+	flags.IntVar(&inputMiB, "structured-input-mib", defaultStructuredInput>>20, "fullscreen structured payload input limit in MiB")
+	flags.IntVar(&outputMiB, "rendered-output-mib", defaultRenderedOutput>>20, "fullscreen rendered payload limit in MiB")
 	flags.Int64Var(&storageMiB, "payload-storage-mib", payloadQuota>>20, "temporary storage for complete payloads in MiB (0 disables spilling)")
 	flags.StringVar(&o.profileName, "cluster", "", "choose a named saved cluster")
 	flags.StringVar(&o.view, "view", "", "initial view: groups or topics (API backend only for topics)")

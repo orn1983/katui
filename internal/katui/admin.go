@@ -196,10 +196,10 @@ func (b *broker) metadataBroker(ctx context.Context) (string, int32, error) {
 	if len(md.Brokers) == 0 {
 		return "", -1, errors.New("no brokers advertised")
 	}
-	cluster := ""
-	if md.ClusterID != nil {
-		cluster = *md.ClusterID
+	if md.ClusterID == nil || *md.ClusterID == "" {
+		return "", -1, errors.New("Kafka did not provide a cluster ID for administration")
 	}
+	cluster := *md.ClusterID
 	for _, broker := range md.Brokers {
 		if broker.NodeID == md.ControllerID {
 			return cluster, md.ControllerID, nil
@@ -571,9 +571,6 @@ func (b *broker) prepareAdmin(ctx context.Context, in adminInput) (adminPlan, er
 			t, e := timestamp(in.value)
 			if e != nil {
 				return p, e
-			}
-			if t.UnixMilli() < 0 {
-				return p, errors.New("timestamp cannot precede the Unix epoch")
 			}
 			at, err = b.timestampOffsets(ctx, in.selected, t.UnixMilli())
 			if err != nil {

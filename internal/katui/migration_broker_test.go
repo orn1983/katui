@@ -57,6 +57,38 @@ func migrationReset() adminInput {
 	return adminInput{operation: opReset, target: migrationGroup, mode: 2, selected: []partKey{{migrationTopic, 0}, {migrationTopic, 1}}}
 }
 
+func TestAdminRequiresClusterIdentity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	c := kfake.MustCluster(kfake.NumBrokers(1), kfake.ClusterID(""))
+	t.Cleanup(c.Close)
+	b := &broker{options: options{backend: "api", brokers: c.ListenAddrs(), timeout: 2 * time.Second}}
+	if err := b.open(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.close)
+	var creates atomic.Int32
+	c.ControlKey(int16(kmsg.CreateTopics), func(kmsg.Request) (kmsg.Response, error, bool) {
+		creates.Add(1)
+		return nil, nil, false
+	})
+	in := adminInput{operation: opCreate, target: "reviewed", partitions: 1, replicas: 1}
+	if _, err := b.prepareAdmin(ctx, in); err == nil {
+		t.Error("review succeeded without a cluster ID")
+	}
+	other, _, _ := migrationBroker(t)
+	plan, err := other.prepareAdmin(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent, err := b.applyAdmin(ctx, plan); sent || err == nil {
+		t.Errorf("applied review on an unidentified cluster: sent=%v, err=%v", sent, err)
+	}
+	if n := creates.Load(); n != 0 {
+		t.Errorf("unidentified broker received %d CreateTopics requests", n)
+	}
+}
+
 func TestApplyRevalidatesReviewedState(t *testing.T) {
 	for _, change := range []struct{ name, message string }{
 		{"membership", "membership changed"},

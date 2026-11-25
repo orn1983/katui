@@ -430,7 +430,7 @@ func (u *ui) updateStatus() {
 			}
 		}
 	}
-	kinds := []string{"metadata", "offsets", "disk", "groups", "group"}
+	kinds := []string{"metadata", "offsets", "disk", "groups"}
 	if u.workspace != 2 {
 		for _, kind := range kinds {
 			if e := u.errors[kind]; e != "" {

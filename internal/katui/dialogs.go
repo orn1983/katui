@@ -15,6 +15,7 @@ type dialog struct {
 	root         *tview.Flex
 	status       *tview.TextView
 	footer       *tview.Flex
+	origin       *location
 	restoreFocus func()
 	buttons      []*tview.Button
 	actions      map[rune]dialogAction
@@ -63,6 +64,7 @@ func (u *ui) openDialog(title string, body, initial tview.Primitive, fullscreen 
 		u.invalidateMonitor()
 	}
 	d := u.newDialog(title, body)
+	d.origin = u.current()
 	d.id, d.restoreFocus = fmt.Sprintf("modal-%d", u.modalID), u.dialogReturnFocus()
 	var page tview.Primitive = d.root
 	if !fullscreen {
@@ -91,6 +93,11 @@ func (d *dialog) close() {
 	}
 	d.u.modalDepth--
 	if d.u.modalDepth == 0 {
+		if d.u.current() != d.origin {
+			// The action removed the location that owned the dialog.
+			d.u.showLocation()
+			return
+		}
 		d.u.refreshView()
 		d.u.poll()
 	}
@@ -330,6 +337,7 @@ func (u *ui) help() {
 		"",
 		"Monitoring",
 		k("s") + " Sort  " + k("r") + " Refresh or retry monitoring  " + k("z") + " Zoom",
+		"Opened groups keep sampling at your configured interval while you browse or use a dialog. Switching clusters or quitting ends the session.",
 		"Open a group, then a partition to see its consumption chart. A blank column is a missing sample. A thin mark at the bottom is a measured zero.",
 		"Offset discontinuities shows how often the log end or committed offset moved backward.",
 		"Offsets are positions. Counts and rates based on offsets are estimates.",

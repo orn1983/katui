@@ -465,10 +465,15 @@ func (u *ui) adminReview(plan adminPlan) {
 					if plan.operation == opRebalance {
 						outcome += ". Group convergence is pending."
 					}
+					if plan.operation == opDeleteGroup {
+						u.removeGroups(func(name string) bool { return name == plan.target })
+						u.saveCache()
+					}
 					d.say(outcome)
 					u.say(outcome)
 				}
 				u.invalidateMonitor()
+				u.resetGroupPoll()
 			})
 		}()
 	}

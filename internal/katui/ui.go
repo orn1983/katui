@@ -68,6 +68,9 @@ type ui struct {
 	updates                        chan func()
 	monitoring                     atomic.Bool
 	monitorPaused                  bool
+	watchedGroups                  map[string]*groupWatch
+	groupPoll                      *groupPoll
+	nextWatchTick                  atomic.Int64
 	metadata                       kadm.TopicDetails
 	topics                         map[string]topicSample
 	sizes                          map[partKey]int64
@@ -86,7 +89,7 @@ type ui struct {
 	monitorCancel                  context.CancelFunc
 	busy                           map[string]bool
 	next                           map[string]time.Time
-	failures                       map[string]int
+	retry                          map[string]time.Duration
 	errors                         map[string]string
 	prefs                          preferences
 	sessionProfiles                map[string]profile
@@ -117,7 +120,8 @@ func newUI(ctx context.Context, b *broker) *ui {
 		pickerHistory: map[string]*location{}, topics: map[string]topicSample{}, groups: map[string]groupSample{},
 		sizes: map[partKey]int64{}, metrics: map[observationKey]*measurement{}, groupErrors: map[string]string{}, cached: map[string]bool{},
 		deleted: map[string]time.Time{}, errors: map[string]string{}, sessionProfiles: map[string]profile{},
-		readers: map[string]consumeOptions{},
+		readers:       map[string]consumeOptions{},
+		watchedGroups: map[string]*groupWatch{},
 	}
 	u.stacks = [4][]*location{
 		{{kind: "topics", partition: -1}},
@@ -232,7 +236,9 @@ func (u *ui) heartbeat(screen tcell.Screen) {
 			canceled = nil
 		case <-ticker.C:
 		}
-		if u.ctx.Err() != nil || u.monitoring.Load() || u.readerViewDirty.Load() || len(u.updates) > 0 {
+		watchDue := u.nextWatchTick.Load()
+		if u.ctx.Err() != nil || u.monitoring.Load() || u.readerViewDirty.Load() || len(u.updates) > 0 ||
+			watchDue != 0 && time.Now().UnixNano() >= watchDue {
 			_ = screen.PostEvent(u.updateEvent)
 		}
 	}
@@ -281,6 +287,7 @@ func (u *ui) applyUpdates() {
 		update := <-u.updates
 		update()
 	}
+	u.poll()
 	// The last dialog to close refreshes Messages from the current buffer.
 	if u.modalDepth > 0 {
 		u.readerViewDirty.Store(false)
@@ -290,7 +297,6 @@ func (u *ui) applyUpdates() {
 		(u.readerState.state == "COMPLETE" || u.readerState.state == "ERROR" || !time.Now().Before(u.nextReaderRefresh)) {
 		u.refreshView()
 	}
-	u.poll()
 	u.updateStatus()
 }
 func (u *ui) say(message string) {
@@ -386,6 +392,9 @@ func (u *ui) showLocation() {
 		return
 	}
 	loc := u.current()
+	if loc.group != "" {
+		u.watchGroup(loc.group)
+	}
 	filter := loc.filter
 	u.search.SetText(filter)
 	u.refreshView()
@@ -687,6 +696,10 @@ func (u *ui) cycleFocus(reverse bool) {
 func (u *ui) requestRefresh() {
 	u.monitorPaused = false
 	u.invalidateMonitor()
+	if w := u.watchedGroups[u.current().group]; w != nil {
+		*w = groupWatch{}
+		u.nextWatchTick.Store(0)
+	}
 	u.poll()
 	if u.workspace != 2 {
 		u.say("Refresh requested")

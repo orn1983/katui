@@ -3,7 +3,6 @@ package katui
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -14,10 +13,126 @@ type observationKey struct {
 	group string
 	partKey
 }
+
 type cacheFile struct {
 	GroupNames []string               `json:"group_names"`
 	Groups     map[string]groupSample `json:"groups"`
 	At         time.Time              `json:"at"`
+}
+
+// A watch belongs to this cluster session. Navigating only cancels the
+// foreground browser requests, so an in-flight chart sample can finish.
+type groupWatch struct {
+	next  time.Time
+	retry time.Duration
+}
+
+type groupPoll struct {
+	groups map[string]*groupWatch
+	cancel context.CancelFunc
+}
+
+func retryDelay(interval, previous time.Duration) time.Duration {
+	if previous == 0 {
+		return max(time.Second, interval)
+	}
+	if previous >= 30*time.Second {
+		return previous
+	}
+	return min(30*time.Second, 2*previous)
+}
+
+func (u *ui) watchGroup(name string) {
+	if u.watchedGroups[name] != nil {
+		return
+	}
+	w := &groupWatch{}
+	if g, ok := u.groups[name]; ok && !u.cached[name] && g.Error == "" && u.groupErrors[name] == "" {
+		w.next = g.At.Add(u.b.interval)
+	}
+	u.watchedGroups[name] = w
+	u.nextWatchTick.Store(0)
+}
+
+func (u *ui) resetGroupPoll() {
+	if u.groupPoll != nil {
+		u.groupPoll.cancel()
+		u.groupPoll = nil
+	}
+	for _, w := range u.watchedGroups {
+		*w = groupWatch{}
+	}
+	u.nextWatchTick.Store(0)
+}
+
+func (u *ui) pollWatchedGroups() {
+	if u.monitorPaused || u.groupPoll != nil || len(u.watchedGroups) == 0 || len(u.b.brokers) == 0 {
+		return
+	}
+	now := time.Now()
+	if now.UnixNano() < u.nextWatchTick.Load() {
+		return
+	}
+	var names []string
+	var earliest time.Time
+	for name, w := range u.watchedGroups {
+		if !now.Before(w.next) {
+			names = append(names, name)
+		} else if earliest.IsZero() || earliest.After(w.next) {
+			earliest = w.next
+		}
+	}
+	if len(names) == 0 {
+		u.nextWatchTick.Store(earliest.UnixNano())
+		return
+	}
+	// The API batches groups. The CLI starts processes per group, so give
+	// the longest-waiting group its own timeout and then service the next.
+	if u.b.backend == "cli" {
+		oldest := names[0]
+		for _, name := range names[1:] {
+			if u.watchedGroups[name].next.Before(u.watchedGroups[oldest].next) {
+				oldest = name
+			}
+		}
+		names = []string{oldest}
+	}
+	ctx, cancel := context.WithTimeout(u.ctx, u.b.timeout)
+	poll := &groupPoll{groups: make(map[string]*groupWatch, len(names)), cancel: cancel}
+	for _, name := range names {
+		poll.groups[name] = u.watchedGroups[name]
+	}
+	u.groupPoll = poll
+	u.nextWatchTick.Store(0)
+	go func() {
+		defer cancel()
+		snapshots := u.b.groupSnapshots(ctx, names)
+		u.post(func() {
+			if u.groupPoll != poll {
+				return
+			}
+			u.groupPoll = nil
+			for name, w := range poll.groups {
+				if u.watchedGroups[name] != w {
+					continue // A complete group listing removed this watch.
+				}
+				g, ok := snapshots[name]
+				if !ok {
+					g = groupSample{Name: name, At: time.Now(), Error: "group observation unavailable"}
+				}
+				u.acceptGroup(g)
+				if g.Error == "" {
+					w.next, w.retry = now.Add(u.b.interval), 0
+				} else {
+					w.retry = retryDelay(u.b.interval, w.retry)
+					w.next = time.Now().Add(w.retry)
+				}
+			}
+			if u.modalDepth == 0 && poll.groups[u.current().group] != nil {
+				u.refreshView()
+			}
+		})
+	}()
 }
 
 func (u *ui) loadCache() {
@@ -72,7 +187,7 @@ func (u *ui) invalidateMonitor() {
 	}
 	u.busy = map[string]bool{}
 	u.next = map[string]time.Time{}
-	u.failures = map[string]int{}
+	u.retry = map[string]time.Duration{}
 }
 
 func (u *ui) sample(kind string, interval time.Duration, work func(context.Context, func(func())) (func(), error)) {
@@ -108,15 +223,11 @@ func (u *ui) sample(kind string, interval time.Duration, work func(context.Conte
 					u.relationshipError = err.Error()
 					u.pendingGroups = false
 				}
-				u.failures[kind]++
-				delay := max(time.Second, interval)
-				for i := 1; i < u.failures[kind] && delay < 30*time.Second; i++ {
-					delay = min(30*time.Second, delay*2)
-				}
-				u.next[kind] = time.Now().Add(delay)
+				u.retry[kind] = retryDelay(interval, u.retry[kind])
+				u.next[kind] = time.Now().Add(u.retry[kind])
 			} else {
 				delete(u.errors, kind)
-				u.failures[kind] = 0
+				delete(u.retry, kind)
 				u.next[kind] = now.Add(interval)
 			}
 			if apply != nil {
@@ -133,8 +244,6 @@ func (u *ui) monitorRequest() string {
 	switch u.current().kind {
 	case "topics", "topic", "topic-detail":
 		return "metadata"
-	case "group", "group-detail":
-		return "group"
 	default:
 		return "groups"
 	}
@@ -147,6 +256,11 @@ func (u *ui) connectionPending() bool {
 	if u.workspace == 2 {
 		return u.readerState.state == "CONNECTING" || u.readerState.state == "RECONNECTING"
 	}
+	if name := u.current().group; name != "" {
+		g := u.groups[name]
+		waiting := u.cached[name] || g.At.IsZero() || g.Error != ""
+		return !u.monitorPaused && waiting && (u.groupErrors[name] != "" || u.groupPoll != nil && u.groupPoll.groups[name] != nil)
+	}
 	request := u.monitorRequest()
 	return !u.monitorPaused && (u.busy[request] || u.errors[request] != "")
 }
@@ -156,6 +270,7 @@ func (u *ui) cancelConnection() {
 		u.stopReader()
 	} else {
 		u.invalidateMonitor()
+		u.resetGroupPoll()
 		u.pendingGroups = false
 		u.monitorPaused = true
 	}
@@ -164,6 +279,7 @@ func (u *ui) cancelConnection() {
 }
 
 func (u *ui) poll() {
+	u.pollWatchedGroups()
 	if u.monitorPaused || len(u.b.brokers) == 0 || u.modalDepth > 0 || u.workspace >= 2 {
 		return
 	}
@@ -217,16 +333,7 @@ func (u *ui) poll() {
 		u.pollGroupList(max(15*time.Second, u.b.interval))
 		return
 	}
-	if loc.group != "" {
-		name := loc.group
-		u.sample("group", u.b.interval, func(ctx context.Context, _ func(func())) (func(), error) {
-			g, ok := u.b.groupSnapshots(ctx, []string{name})[name]
-			if !ok {
-				return nil, errors.New("group observation unavailable")
-			}
-			return func() { u.acceptGroup(g) }, stringError(g.Error)
-		})
-	} else {
+	if loc.group == "" {
 		interval := max(5*time.Second, u.b.interval)
 		if loc.kind == "picker" {
 			interval = max(15*time.Second, u.b.interval)
@@ -241,16 +348,22 @@ func (u *ui) pollGroupList(interval time.Duration) {
 		if len(names) == 0 && nameErr != nil {
 			return nil, nameErr
 		}
+		var unwatched []string
 		deliver(func() {
 			u.updateGroupList(names, nameErr)
+			for _, name := range names {
+				if u.watchedGroups[name] == nil {
+					unwatched = append(unwatched, name)
+				}
+			}
 			u.pendingGroups = true
 			u.relationshipAt = time.Now()
 			u.relationshipError = errorText(nameErr)
 		})
-		snapshots := u.b.groupSnapshots(ctx, names)
+		snapshots := u.b.groupSnapshots(ctx, unwatched)
 		return func() {
 			u.pendingGroups = false
-			for _, name := range names {
+			for _, name := range unwatched {
 				if g, ok := snapshots[name]; ok {
 					u.acceptGroup(g)
 				} else {
@@ -344,16 +457,40 @@ func (u *ui) updateGroupList(names []string, listErr error) {
 	for _, name := range names {
 		live[name] = true
 	}
-	maps.DeleteFunc(u.groups, func(name string, _ groupSample) bool { return !live[name] })
-	maps.DeleteFunc(u.groupErrors, func(name string, _ string) bool { return !live[name] })
-	maps.DeleteFunc(u.cached, func(name string, _ bool) bool { return !live[name] })
-	maps.DeleteFunc(u.metrics, func(k observationKey, _ *measurement) bool { return k.group != "" && !live[k.group] })
+	u.removeGroups(func(name string) bool { return !live[name] })
+}
+
+func (u *ui) removeGroups(removed func(string) bool) {
+	u.relationships = nil
+	u.groupNames = slices.DeleteFunc(u.groupNames, removed)
+	maps.DeleteFunc(u.groups, func(name string, _ groupSample) bool { return removed(name) })
+	maps.DeleteFunc(u.groupErrors, func(name string, _ string) bool { return removed(name) })
+	maps.DeleteFunc(u.cached, func(name string, _ bool) bool { return removed(name) })
+	maps.DeleteFunc(u.metrics, func(k observationKey, _ *measurement) bool { return k.group != "" && removed(k.group) })
+	maps.DeleteFunc(u.watchedGroups, func(name string, _ *groupWatch) bool { return removed(name) })
+	// A group can be open in both the Groups workspace and a topic's consumer picker.
+	for i, stack := range u.stacks {
+		u.stacks[i] = slices.DeleteFunc(stack, func(loc *location) bool {
+			return loc.group != "" && removed(loc.group)
+		})
+	}
+	if len(u.watchedGroups) == 0 {
+		u.nextWatchTick.Store(0)
+	}
 }
 
 func (u *ui) acceptGroup(g groupSample) {
 	u.relationships = nil
 	if g.Error != "" {
 		u.groupErrors[g.Name] = g.Error
+		for _, p := range u.groups[g.Name].Partitions {
+			if m := u.metrics[observationKey{g.Name, p.partKey}]; m != nil {
+				m.end.add(g.At, nil)
+				m.commit.add(g.At, nil)
+				m.lag.add(g.At, nil)
+				m.chartSample(&m.commit, false)
+			}
+		}
 		if _, ok := u.groups[g.Name]; !ok {
 			u.groups[g.Name] = g
 		}
@@ -367,12 +504,6 @@ func (u *ui) acceptGroup(g groupSample) {
 	u.groups[g.Name] = g
 }
 
-func stringError(message string) error {
-	if message == "" {
-		return nil
-	}
-	return errors.New(message)
-}
 func errorText(err error) string {
 	if err == nil {
 		return ""

@@ -79,6 +79,8 @@ The CLI backend opens Consumer Groups (`2`) and provides the Clusters workspace 
 
 ### Monitor consumer rates
 
+Opening a consumer group starts sampling its partitions at the configured interval (`-i`, five seconds by default). You can open other groups, read records, or work in a dialog and then return to see the intervening history. Each chart keeps up to 90 samples. Groups you only pass over in a list follow that list’s refresh schedule. Katui stops tracking a group when Kafka confirms its deletion or a complete group listing omits it. Switching clusters or quitting ends all background sampling.
+
 Open a group with Enter and press Enter on a partition to inspect its lag, owner, offsets, and consumption chart. A blank column means there is no rate sample. An underscore (`_`) at the bottom means the offset was measured and stayed the same. A positive rate draws a bar, even when it is small relative to the peak. **Offset discontinuities** counts samples where the committed offset or log end moved backward. Katui resets the affected rate history and lag baseline when that happens.
 
 ### Inspect, copy, and export payloads

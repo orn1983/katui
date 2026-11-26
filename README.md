@@ -1,6 +1,14 @@
 # Katui
 
-Katui is a Go terminal application for browsing Kafka topics, monitoring consumer groups, reading records, inspecting payloads, and reviewing Kafka administration changes.
+Katui is a terminal UI for Apache Kafka.
+
+## Features
+
+- **Manage connections.** Save broker addresses in cluster profiles and switch between them. Connect with TLS, client certificates, or SASL authentication.
+- **Monitor topics and groups.** Check replica health, disk usage, per-partition lag, throughput history, and catch-up estimates.
+- **Read records.** Follow live messages or start at a timestamp or offset. Search, compare, copy, and export records.
+- **Inspect payloads.** Pretty-print JSON or explore it as a tree. View CSV as a table or pivot, and decode Protobuf using local schemas.
+- **Administer Kafka.** Create, configure, or delete topics, set retention in human-readable units, reset group offsets, and request rebalances. Review changes before applying them.
 
 ![Katui’s Topics view shows partition counts, message rates, and disk usage. The parcel.scans row is yellow because 35 of its 36 replicas are in sync.](docs/screenshots/topics.png)
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +25,7 @@ func startClusterUI(t *testing.T, profiles map[string]connectionProfile, args ..
 func startClusterUIWithScreen(t *testing.T, profiles map[string]connectionProfile, screen tcell.Screen, args ...string) (*ui, <-chan struct{}) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := saveConnectionProfiles("api", profiles); err != nil {
+	if err := saveConnectionProfiles(profiles); err != nil {
 		t.Fatal(err)
 	}
 	opts, err := arguments(append([]string{"--no-cache"}, args...), io.Discard)
@@ -90,57 +90,6 @@ func expectWorkspaceBar(t *testing.T, u *ui, screen tcell.Screen, text, selected
 		_, _, style, _ := screen.GetContent(strings.Index(text, selected), 1)
 		_, bg, _ := style.Decompose()
 		return bg == u.accent
-	})
-}
-
-func TestCLIGroupNavigation(t *testing.T) {
-	// An empty CLI group listing is sufficient to exercise the workspace.
-	command, err := exec.LookPath("true")
-	if err != nil {
-		t.Skip("requires the true utility")
-	}
-	u, screen, _ := startClusterUI(t, nil, "--backend", "cli", "--kafka-cli", command, "-b", "127.0.0.1:1")
-	const tabs = "2 Consumer Groups  4 Clusters"
-	expectWorkspaceBar(t, u, screen, tabs, "Consumer Groups")
-	clusterKey(t, screen, tcell.KeyRune, '4', 0)
-	expectWorkspaceBar(t, u, screen, tabs, "Clusters")
-	clusterKey(t, screen, tcell.KeyRune, '2', 0)
-	expectWorkspaceBar(t, u, screen, tabs, "Consumer Groups")
-	u.post(func() {
-		tabs := u.tabs.GetText(true)
-		if !strings.Contains(tabs, "Consumer Groups") || !strings.Contains(tabs, "Clusters") ||
-			strings.Contains(tabs, "Topics") || strings.Contains(tabs, "Messages") {
-			t.Errorf("unexpected CLI workspace labels: %q", tabs)
-		}
-		for _, kind := range []string{"groups", "group", "group-detail"} {
-			labels := u.updateControls(kind)
-			if strings.Contains(labels, "Manage") || strings.Contains(labels, "Consume") {
-				t.Errorf("%s advertises unsupported CLI actions: %q", kind, labels)
-			}
-		}
-	})
-	clusterKey(t, screen, tcell.KeyRune, '3', 0)
-	waitKeyboardState(t, u, "CLI Messages shortcut opened a reader", func() bool {
-		return u.workspace == 1 && strings.Contains(u.message, "Messages require API backend")
-	})
-	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
-	clusterKey(t, screen, tcell.KeyRune, '?', tcell.ModShift)
-	waitKeyboardState(t, u, "CLI keyboard reference did not open", func() bool {
-		_, ok := u.app.GetFocus().(*tview.TextView)
-		return ok && u.modalDepth == 1
-	})
-	u.post(func() {
-		help := u.app.GetFocus().(*tview.TextView).GetText(true)
-		for _, label := range []string{"2 Consumer Groups", "4 Clusters", "Monitoring", "Kafka CLI properties", "File browser"} {
-			if !strings.Contains(help, label) {
-				t.Errorf("CLI keyboard reference is missing %q", label)
-			}
-		}
-		for _, label := range []string{"1 Topics", "3 Messages", "Create topic", "Start consuming", "Protobuf schema editor"} {
-			if strings.Contains(help, label) {
-				t.Errorf("CLI keyboard reference advertises %q", label)
-			}
-		}
 	})
 }
 
@@ -300,7 +249,7 @@ func TestSavedClusterPromptsOnlyForSessionPassword(t *testing.T) {
 			u, screen, done := startClusterUI(t, map[string]connectionProfile{
 				"Ask": {Brokers: []string{addr}, Security: security, PromptPassword: true},
 			}, args...)
-			path := connectionProfilesPath("api")
+			path := connectionProfilesPath()
 			before, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
@@ -324,6 +273,97 @@ func TestSavedClusterPromptsOnlyForSessionPassword(t *testing.T) {
 			after, err := os.ReadFile(path)
 			if err != nil || string(before) != string(after) {
 				t.Fatal("quick connect changed the saved profile")
+			}
+		})
+	}
+}
+
+func TestImportPropertiesIntoConnectionForm(t *testing.T) {
+	const secret = "fixture-import-password"
+	const addr = "review.example.test:9093"
+	for _, tc := range []struct {
+		name, properties string
+		secure           bool
+	}{
+		{"secure", "bootstrap.servers=" + addr + "\nsecurity.protocol=SASL_SSL\nsasl.mechanism=PLAIN\nsasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username=\"parcel\" password=\"" + secret + "\";\n", true},
+		{"plain", "security.protocol=PLAINTEXT\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("HOME", dir)
+			properties := tc.properties
+			var ca string
+			if tc.secure {
+				ca, _ = writePropertiesTestCA(t, dir)
+				properties += "ssl.truststore.type=PEM\nssl.truststore.location=" + ca + "\n"
+			}
+			if err := os.WriteFile(filepath.Join(dir, "client.properties"), []byte(properties), 0600); err != nil {
+				t.Fatal(err)
+			}
+			old := &securityConfig{TLS: true}
+			old.SASL.Mechanism, old.SASL.Username, old.SASL.Password = "SCRAM-SHA-256", "before", "prior-fixture"
+			u, screen, done := startClusterUI(t, map[string]connectionProfile{
+				"Edit": {Brokers: []string{"old.example.test:9092"}, ClientConfig: "outdated.json", Security: old},
+			})
+			original, err := os.ReadFile(connectionProfilesPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			clusterKey(t, screen, tcell.KeyRune, 'e', 0)
+			clusterKey(t, screen, tcell.KeyRune, 'i', tcell.ModAlt)
+			waitKeyboardState(t, u, "Import file picker did not list client.properties", func() bool {
+				table, ok := u.app.GetFocus().(*tview.Table)
+				if !ok {
+					return false
+				}
+				for row := 1; row < table.GetRowCount(); row++ {
+					if strings.Contains(table.GetCell(row, 0).Text, "client.properties") {
+						table.Select(row, 0)
+						return true
+					}
+				}
+				return false
+			})
+			clusterKey(t, screen, tcell.KeyEnter, 0, 0)
+			expectedBrokers := "old.example.test:9092"
+			if tc.secure {
+				expectedBrokers = addr
+			}
+			waitKeyboardState(t, u, "import did not return to the broker field for review", func() bool {
+				input, ok := u.app.GetFocus().(*tview.InputField)
+				return ok && input.GetLabel() == buttonLabel("Brokers", "Alt+A") && input.GetText() == expectedBrokers
+			})
+			afterImport, err := os.ReadFile(connectionProfilesPath())
+			if err != nil || string(afterImport) != string(original) {
+				t.Fatal("import changed saved profiles before Connect")
+			}
+			clusterKey(t, screen, tcell.KeyRune, 'c', tcell.ModAlt)
+			waitClusterSelection(t, u, done, "Edit", expectedBrokers)
+			conn := u.nextBroker
+			saved, err := loadConnectionProfiles()
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := saved["Edit"]
+			if conn.config != "" || profile.ClientConfig != "" {
+				t.Fatal("import retained the previous config path")
+			}
+			if tc.secure {
+				if conn.security == nil {
+					t.Fatal("imported security settings are missing")
+				}
+				auth := conn.security.SASL
+				if !conn.security.TLS || auth.Mechanism != "PLAIN" || auth.Username != "parcel" || auth.Password != secret {
+					t.Fatalf("TLS=%t mechanism=%s username matches=%t password matches=%t", conn.security.TLS, auth.Mechanism, auth.Username == "parcel", auth.Password == secret)
+				}
+				if profile.Security == nil || profile.Security.SASL.Password != "" || !profile.PromptPassword {
+					t.Fatal("saved credentials did not revert to a session-only password")
+				}
+				if conn.security.CAFile != ca || !conn.security.CAFileOnly || profile.Security.CAFile != ca || !profile.Security.CAFileOnly {
+					t.Fatal("imported PEM-only trust was lost when connecting or saving")
+				}
+			} else if conn.security != nil || profile.Security != nil || profile.PromptPassword {
+				t.Fatal("plaintext import retained previous credentials")
 			}
 		})
 	}

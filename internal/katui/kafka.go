@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -176,18 +173,6 @@ func (b *broker) sizes(ctx context.Context, metadata kadm.TopicDetails) (map[par
 }
 
 func (b *broker) groupNames(ctx context.Context) ([]string, error) {
-	if b.backend == "cli" {
-		output, err := b.cliOutput(ctx, "--list")
-		var names []string
-		for line := range strings.Lines(output) {
-			name := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-			if name != "" {
-				names = append(names, name)
-			}
-		}
-		sort.Strings(names)
-		return names, err
-	}
 	listed, err := b.admin.ListGroups(ctx)
 	return sortedKeys(listed), err
 }
@@ -195,15 +180,6 @@ func (b *broker) groupNames(ctx context.Context) ([]string, error) {
 func (b *broker) groupSnapshots(ctx context.Context, names []string) map[string]groupSample {
 	result := make(map[string]groupSample, len(names))
 	if len(names) == 0 {
-		return result
-	}
-	if b.backend == "cli" {
-		for _, name := range names {
-			result[name] = b.cliGroup(ctx, name)
-			if ctx.Err() != nil {
-				break
-			}
-		}
 		return result
 	}
 	descriptions, descErr := b.admin.DescribeGroups(ctx, names...)
@@ -316,128 +292,6 @@ func sortParts(parts []partition) {
 	})
 }
 
-func (b *broker) findCLI() error {
-	if b.cli != "" {
-		p, err := exec.LookPath(expandHome(b.cli))
-		b.cli = p
-		return err
-	}
-	if p, err := exec.LookPath("kafka-consumer-groups.sh"); err == nil {
-		b.cli = p
-		return nil
-	}
-	if home := os.Getenv("KAFKA_HOME"); home != "" {
-		p, err := exec.LookPath(filepath.Join(home, "bin", "kafka-consumer-groups.sh"))
-		if err == nil {
-			b.cli = p
-			return nil
-		}
-	}
-	return errors.New("kafka-consumer-groups.sh not found; specify --kafka-cli")
-}
-
-type cliOutputBuffer struct {
-	buf       strings.Builder
-	limit     int
-	truncated bool
-}
-
-func (b *cliOutputBuffer) Write(p []byte) (int, error) {
-	n := min(len(p), b.limit-b.buf.Len())
-	_, _ = b.buf.Write(p[:n])
-	b.truncated = b.truncated || n < len(p)
-	return len(p), nil
-}
-
-func (b *broker) cliOutput(ctx context.Context, args ...string) (string, error) {
-	prefix := []string{"--bootstrap-server", strings.Join(b.brokers, ",")}
-	if b.commandConfig != "" {
-		prefix = append(prefix, "--command-config", expandHome(b.commandConfig))
-	}
-	cmd := exec.CommandContext(ctx, b.cli, append(prefix, args...)...)
-	// A descendant can inherit an output pipe from the CLI wrapper. Bound
-	// how long Wait can spend draining pipes after exit or cancellation.
-	cmd.WaitDelay = time.Second
-	stdout := cliOutputBuffer{limit: 16 << 20}
-	stderr := cliOutputBuffer{limit: 64 << 10}
-	cmd.Stdout = &stdout
-	if b.commandConfig == "" {
-		cmd.Stderr = &stderr
-	}
-	err := cmd.Run()
-	if stdout.truncated {
-		return "", errors.New("Kafka CLI output exceeded 16 MiB")
-	}
-	output := stdout.buf.String()
-	// Kafka's consumer-group tool can print an error and exit successfully.
-	if strings.HasPrefix(output, "\nError: ") || strings.HasPrefix(output, "\r\nError: ") {
-		if b.commandConfig != "" {
-			return "", errors.New("Kafka CLI reported a failure while using --command-config")
-		}
-		return "", fmt.Errorf("Kafka CLI: %s", safe(shortened(strings.TrimSpace(output), 4096), false))
-	}
-	if err != nil {
-		err = errors.Join(err, ctx.Err())
-		if b.commandConfig != "" {
-			return "", fmt.Errorf("Kafka CLI with --command-config: %w", err)
-		}
-		detail := strings.TrimSpace(stderr.buf.String())
-		if detail == "" {
-			detail = strings.TrimSpace(output)
-		}
-		if detail != "" {
-			return "", fmt.Errorf("Kafka CLI: %w: %s", err, safe(shortened(detail, 4096), false))
-		}
-		return "", fmt.Errorf("Kafka CLI: %w", err)
-	}
-	return output, nil
-}
-
-func cliGroupFields(line, name string) []string {
-	rest, matched := strings.CutPrefix(line, name)
-	if !matched || !strings.HasPrefix(rest, " ") {
-		return nil
-	}
-	return strings.Fields(rest)
-}
-
-func (b *broker) cliGroup(ctx context.Context, name string) groupSample {
-	g := groupSample{Name: name, At: time.Now(), Partitions: []partition{}}
-	data, err := b.cliOutput(ctx, "--describe", "--group", name)
-	if err != nil {
-		g.Error = err.Error()
-		return g
-	}
-	for line := range strings.Lines(data) {
-		f := cliGroupFields(line, name)
-		if len(f) < 7 || f[0] == "-" {
-			continue
-		}
-		id, err := strconv.ParseInt(f[1], 10, 32)
-		if err != nil || id < 0 {
-			continue
-		}
-		p := partition{partKey: partKey{f[0], int32(id)}, Commit: nonnegative(f[2]), End: nonnegative(f[3])}
-		if f[5] != "-" {
-			p.Owner = f[5]
-			p.Host = f[6]
-			p.Client = strings.Join(f[7:], " ")
-		}
-		g.Partitions = append(g.Partitions, p)
-	}
-	state, err := b.cliOutput(ctx, "--describe", "--state", "--group", name)
-	if err == nil {
-		for line := range strings.Lines(state) {
-			f := cliGroupFields(line, name)
-			if len(f) >= 3 && nonnegative(f[len(f)-1]) != nil {
-				g.State = f[len(f)-2]
-				break
-			}
-		}
-	}
-	sortParts(g.Partitions)
-	return g
-}
 func nonnegative(s string) *int64 {
 	i, err := strconv.ParseInt(s, 10, 64)
 	if err != nil || i < 0 {

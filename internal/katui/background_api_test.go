@@ -2,6 +2,7 @@ package katui
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func TestAPIMonitorsOpenedGroupsWhileBrowsingMessages(t *testing.T) {
 	defer cancel()
 	b, cluster, producer := migrationBroker(t)
 	seedMigrationOffsets(t, ctx, b, producer)
-	const otherGroup = "other-reader"
+	const otherGroup, unopenedGroup = "other-reader", "unopened-reader"
 	commit := func(group string, offset int64) {
 		t.Helper()
 		var offsets kadm.Offsets
@@ -26,6 +27,7 @@ func TestAPIMonitorsOpenedGroupsWhileBrowsingMessages(t *testing.T) {
 		}
 	}
 	commit(otherGroup, 1)
+	commit(unopenedGroup, 1)
 	groups := []string{migrationGroup, otherGroup}
 	u, screen, _ := startClusterUI(t, nil, "-b", cluster.ListenAddrs()[0], "--view", "groups", "-i", "0.1")
 	for i, group := range groups {
@@ -64,19 +66,26 @@ func TestAPIMonitorsOpenedGroupsWhileBrowsingMessages(t *testing.T) {
 		}
 		return nil, nil, false
 	})
-	counts := map[string]int{}
-	deadline := time.NewTimer(3 * time.Second)
-	defer deadline.Stop()
-	for counts[migrationGroup] < 3 || counts[otherGroup] < 3 {
-		select {
-		case names := <-requests:
-			for _, name := range names {
-				counts[name]++
+	waitForBackgroundSamples := func() {
+		t.Helper()
+		counts := map[string]int{}
+		deadline := time.NewTimer(3 * time.Second)
+		defer deadline.Stop()
+		for counts[migrationGroup] < 3 || counts[otherGroup] < 3 {
+			select {
+			case names := <-requests:
+				if slices.Contains(names, unopenedGroup) {
+					t.Fatalf("background poll included unopened group %q", unopenedGroup)
+				}
+				for _, name := range names {
+					counts[name]++
+				}
+			case <-deadline.C:
+				t.Fatalf("background sample counts for the 100 ms interval: %v", counts)
 			}
-		case <-deadline.C:
-			t.Fatalf("background sample counts for the 100 ms interval: %v", counts)
 		}
 	}
+	waitForBackgroundSamples()
 	u.post(func() {
 		for _, group := range groups {
 			m := u.metrics[observationKey{group, partKey{migrationTopic, 0}}]
@@ -93,6 +102,10 @@ func TestAPIMonitorsOpenedGroupsWhileBrowsingMessages(t *testing.T) {
 			}
 		}
 	})
+	clusterKey(t, screen, tcell.KeyCtrlP, 0, 0)
+	waitKeyboardState(t, u, "Help & Commands did not open", func() bool { return u.modalDepth == 1 })
+	waitForBackgroundSamples()
+	clusterKey(t, screen, tcell.KeyEscape, 0, 0)
 	clusterKey(t, screen, tcell.KeyRune, '2', 0)
 	clusterKey(t, screen, tcell.KeyEnter, 0, 0)
 	waitKeyboardState(t, u, "reopened partition detail did not display the background samples", func() bool {

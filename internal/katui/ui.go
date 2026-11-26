@@ -370,18 +370,6 @@ func (u *ui) savePosition() {
 	}
 }
 func (u *ui) changeWorkspace(w int) {
-	if (w == 0 || w == 2) && u.b.backend == "cli" {
-		message := "Topics require API backend"
-		if w == 2 {
-			message = "Messages require API backend"
-		}
-		if u.workspace == clustersWorkspace {
-			u.clusters.say(message)
-		} else {
-			u.say(message)
-		}
-		return
-	}
 	if w == u.workspace {
 		return
 	}
@@ -647,14 +635,10 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 	case 'r':
 		u.requestRefresh()
 	case 'c':
-		if u.b.backend == "cli" {
-			u.say("Record reading requires API backend")
-			return nil
-		}
 		if u.workspace == 2 && u.readTopic != "" {
 			topic = u.readTopic
 		}
-		if topic != "" && u.b.backend == "api" {
+		if topic != "" {
 			id := loc.partition
 			if row.partition >= 0 && (loc.kind == "topic" || loc.kind == "group") {
 				id = row.partition
@@ -684,9 +668,7 @@ func (u *ui) keys(ev *tcell.EventKey) *tcell.EventKey {
 				u.topicForm(topic, "Delete topic")
 			}
 		case 'a':
-			if u.b.backend != "api" {
-				u.say("Administration requires API backend")
-			} else if group != "" {
+			if group != "" {
 				part := row.partition
 				if loc.partition >= 0 {
 					part = loc.partition
@@ -821,11 +803,7 @@ func (u *ui) updateControls(kind string) string {
 		}
 		actions = append(actions, k("g")+" Consumers", k("c")+" Consume", k("a")+" Manage", k("d")+" Delete")
 	case "groups":
-		actions = []string{k("Enter") + " Open group"}
-		if u.b.backend == "api" {
-			actions = append(actions, k("a")+" Manage")
-		}
-		actions = append(actions, k("s")+" Sort", k("r")+" Refresh")
+		actions = []string{k("Enter") + " Open group", k("a") + " Manage", k("s") + " Sort", k("r") + " Refresh"}
 	case "picker":
 		actions = []string{k("Esc") + " Back", k("Enter") + " Open group", k("/") + " Search", k("s") + " Sort", k("r") + " Refresh"}
 	case "group", "group-detail":
@@ -833,9 +811,7 @@ func (u *ui) updateControls(kind string) string {
 		if kind == "group" {
 			actions = append(actions, k("Enter")+" Partition")
 		}
-		if u.b.backend == "api" {
-			actions = append(actions, k("a")+" Manage", k("c")+" Consume")
-		}
+		actions = append(actions, k("a")+" Manage", k("c")+" Consume")
 		if kind == "group" {
 			actions = append(actions, k("s")+" Sort")
 		} else {
@@ -873,9 +849,6 @@ func (u *ui) refreshView() {
 	u.header.SetText(header)
 	var labels []string
 	for i, label := range []string{"Topics", "Consumer Groups", "Messages", "Clusters"} {
-		if u.b.backend == "cli" && (i == 0 || i == 2) {
-			continue
-		}
 		if i == u.workspace {
 			label = "[black:" + u.accent.String() + ":b]" + label + "[-:-:-]"
 		}

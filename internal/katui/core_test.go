@@ -113,7 +113,7 @@ func TestKafkaIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	opts := options{brokers: []string{address}, cluster: address, backend: "api", timeout: 5 * time.Second}
+	opts := options{brokers: []string{address}, cluster: address, timeout: 5 * time.Second}
 	client, err := opts.kafka("")
 	if err != nil {
 		t.Fatal(err)

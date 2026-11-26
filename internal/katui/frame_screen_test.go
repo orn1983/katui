@@ -115,7 +115,7 @@ func TestFrameScreenMatchesDirectDrawing(t *testing.T) {
 }
 
 func TestFrameScreenLifecycle(t *testing.T) {
-	backend := &broker{options: options{backend: "api", noCache: true, interval: time.Hour}}
+	backend := &broker{options: options{noCache: true, interval: time.Hour}}
 	u := newUI(t.Context(), backend)
 	bad := &observedTerminal{initErr: errors.New("terminal setup failed")}
 	if err := u.runOnScreen(bad); !errors.Is(err, bad.initErr) || bad.starts != 1 || bad.stops != 0 {

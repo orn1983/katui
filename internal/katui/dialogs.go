@@ -338,16 +338,9 @@ func (u *ui) quit() {
 }
 func (u *ui) help() {
 	k := keyHint
-	api := u.b.backend == "api"
-	workspaces := k("2") + " Consumer Groups  " + k("4") + " Clusters"
-	setup := k("Alt+A") + " Brokers  " + k("Alt+B") + " Browse for Kafka CLI properties"
-	if api {
-		workspaces = k("1") + " Topics  " + k("2") + " Consumer Groups  " + k("3") + " Messages  " + k("4") + " Clusters"
-		setup = k("Alt+A") + " Brokers  " + k("Alt+S") + " Security"
-	}
 	lines := []string{
 		"Navigation",
-		workspaces,
+		k("1") + " Topics  " + k("2") + " Consumer Groups  " + k("3") + " Messages  " + k("4") + " Clusters",
 		k("Tab") + " / " + k("Shift+Tab") + " Move focus",
 		k("↓/j") + " Down  " + k("↑/k") + " Up  " + k("PageUp") + " / " + k("PageDown") + " Page",
 		"In tables, " + k("←/→") + " Scroll sideways  " + k("Ctrl+←/→") + " Scroll farther",
@@ -358,7 +351,7 @@ func (u *ui) help() {
 		"",
 		"Kafka clusters",
 		k("↓/j") + " " + k("↑/k") + " Select  " + k("Enter") + " / " + k("c") + " Connect  " + k("e") + " Edit  " + k("n") + " New",
-		"In connection setup, " + setup,
+		"In connection setup, " + k("Alt+A") + " Brokers  " + k("Alt+S") + " Security  " + k("Alt+I") + " Import Kafka properties",
 		k("c") + " Connect  " + k("Alt+C") + " Connect while typing  " + k("Esc") + " Back or cancel",
 		"",
 		"Monitoring",
@@ -367,61 +360,54 @@ func (u *ui) help() {
 		"Open a group, then a partition to see its consumption chart. A heavier segment of the bottom border marks a measured zero. A missing sample leaves the border unchanged.",
 		"Offset discontinuities shows how often the log end or committed offset moved backward.",
 		"Offsets are positions. Counts and rates based on offsets are estimates.",
-	}
-	if api {
-		lines = append(lines,
-			"",
-			"Topics and administration",
-			k("h")+" Show internal / Hide internal  "+k("g")+" Topic consumers",
-			"ISR/Replicas totals in-sync and assigned replicas. Affected P counts partitions with a shortfall or missing leader. Yellow means one missing replica per affected partition. Red means a partition lacks a leader, has zero ISR, or is missing two or more replicas.",
-			k("n")+" Create topic  "+k("a")+" Manage  "+k("d")+" Delete topic",
-			"In topic forms, "+k("Alt+S")+" Stage  "+k("Alt+U")+" Unstage  "+k("Alt+D")+" Stage broker default (Configure only)",
-			"In Configure topic, "+k("Alt+F")+" filters settings and "+k("Alt+B")+" moves to the results.",
-			"Topic settings ending in .ms accept milliseconds or durations such as 1h30m, 1.2d or 6.5w. The value helper shows exact milliseconds. Use m for minutes and mo for 30-day months.",
-			k("Alt+R")+" Review changes. Type the exact target name, then press "+k("Alt+A")+" to apply, or press "+k("Enter")+" to focus the confirmation button and "+k("Enter")+" again to activate it.",
-			"Review requires a Kafka cluster ID. Apply checks the cluster ID again before writing.",
-			"",
-			"Consume",
-			k("c")+" Open Consume  "+k("Alt+P")+" Focus partitions in the dialog",
-			k("Space")+" Toggle partition  "+k("a")+" All  "+k("n")+" None",
-			k("Alt+S")+" Start position  ·  Exact offset uses the same starting offset in every selected partition",
-			"Keep following controls whether the reader waits for new records.",
-			"Reading records does not join a consumer group or commit offsets.",
-			k("Alt+C")+" Start consuming, including while typing",
-			"",
-			"Messages and payloads",
-			k("i")+" Switch records/payload  "+k("b")+" Records  "+k("m")+" Format  "+k("z")+" Zoom focused pane",
-			"Zoom the records list to browse without loading previews. "+k("z")+" or "+k("Esc")+" restores the split. "+k("Enter")+" inspects the highlighted record.",
-			k("p")+" Pause or resume reader  "+k("x")+" Stop reader  ·  Clear buffer in Commands",
-			k("f")+" Toggle Follow (off by default). Entering Cursor or selecting inspector text pins the current record. Press "+k("f")+" to follow again.",
-			k("Space")+" Check or uncheck the row  "+k("a")+" Select all visible records  "+k("n")+" Unselect all",
-			"Checked rows stay highlighted when you move to another message.",
-			k("w")+" Compare selected records  ·  In comparison, "+k("1")+" Payloads  "+k("2")+" Metadata",
-			k("o")+" CSV columns  "+k("u")+" Protobuf  "+k("d")+" Delimiter  "+k("Alt+H")+" Header",
-			k(string(copyValueKey))+" Copy Raw Value  "+k(string(copyViewKey))+" Copy View  "+k("s")+" Save value to file",
-			"In Scroll mode, "+k("←/→")+" Pan 8 columns  "+k("↑/↓")+" Scroll 4 lines",
-			k("Arrows/hjkl")+" Navigate payload text and trees  ·  h left, j down, k up, l right",
-			k("Alt+←/→")+" Pan 8 columns  "+k("Ctrl+←/→")+" Pan half the viewport  "+k("PgUp/PgDn")+" Page",
-			k("Space")+" Toggle Cursor  ·  In Cursor, "+k("Arrows/hjkl")+" Move  "+k("v")+" Toggle Selection",
-			"In Cursor and Selection, "+k("0")+" Line start  "+k("$")+" Line end",
-			"In Selection, "+k("Arrows/hjkl")+" Extend or shrink  "+k("Esc")+" Return to Cursor",
-			k("Shift+arrows")+" Extend selection  "+k("Ctrl+A")+" Select all  "+k("Ctrl+C")+" Copy selected text",
-			k("y")+" Yank and exit Selection  ·  In Scroll or Cursor, copy the selected text or the rendered view",
-			"In the tree, "+k("←/→")+" Collapse or expand nodes  "+k("Tab")+" Focus node text",
-			k("/")+" Search payload in Fullscreen  "+k("Enter")+" Return to payload  "+k("n")+" Next  "+k("p")+" Previous",
-			k("Alt+L")+" Load full if available  "+k("Enter")+" Confirm  "+k("Esc")+" Cancel",
-			"",
-			"Protobuf schema editor",
-			k("b")+" Browse schema  "+k("i")+" Add import folder  "+k("l")+" Load schema  "+k("a")+" Apply",
-		)
-	}
-	lines = append(lines, "",
+		"",
+		"Topics and administration",
+		k("h") + " Show internal / Hide internal  " + k("g") + " Topic consumers",
+		"ISR/Replicas totals in-sync and assigned replicas. Affected P counts partitions with a shortfall or missing leader. Yellow means one missing replica per affected partition. Red means a partition lacks a leader, has zero ISR, or is missing two or more replicas.",
+		k("n") + " Create topic  " + k("a") + " Manage  " + k("d") + " Delete topic",
+		"In topic forms, " + k("Alt+S") + " Stage  " + k("Alt+U") + " Unstage  " + k("Alt+D") + " Stage broker default (Configure only)",
+		"In Configure topic, " + k("Alt+F") + " filters settings and " + k("Alt+B") + " moves to the results.",
+		"Topic settings ending in .ms accept milliseconds or durations such as 1h30m, 1.2d or 6.5w. The value helper shows exact milliseconds. Use m for minutes and mo for 30-day months.",
+		k("Alt+R") + " Review changes. Type the exact target name, then press " + k("Alt+A") + " to apply, or press " + k("Enter") + " to focus the confirmation button and " + k("Enter") + " again to activate it.",
+		"Review requires a Kafka cluster ID. Apply checks the cluster ID again before writing.",
+		"",
+		"Consume",
+		k("c") + " Open Consume  " + k("Alt+P") + " Focus partitions in the dialog",
+		k("Space") + " Toggle partition  " + k("a") + " All  " + k("n") + " None",
+		k("Alt+S") + " Start position  ·  Exact offset uses the same starting offset in every selected partition",
+		"Keep following controls whether the reader waits for new records.",
+		"Reading records does not join a consumer group or commit offsets.",
+		k("Alt+C") + " Start consuming, including while typing",
+		"",
+		"Messages and payloads",
+		k("i") + " Switch records/payload  " + k("b") + " Records  " + k("m") + " Format  " + k("z") + " Zoom focused pane",
+		"Zoom the records list to browse without loading previews. " + k("z") + " or " + k("Esc") + " restores the split. " + k("Enter") + " inspects the highlighted record.",
+		k("p") + " Pause or resume reader  " + k("x") + " Stop reader  ·  Clear buffer in Commands",
+		k("f") + " Toggle Follow (off by default). Entering Cursor or selecting inspector text pins the current record. Press " + k("f") + " to follow again.",
+		k("Space") + " Check or uncheck the row  " + k("a") + " Select all visible records  " + k("n") + " Unselect all",
+		"Checked rows stay highlighted when you move to another message.",
+		k("w") + " Compare selected records  ·  In comparison, " + k("1") + " Payloads  " + k("2") + " Metadata",
+		k("o") + " CSV columns  " + k("u") + " Protobuf  " + k("d") + " Delimiter  " + k("Alt+H") + " Header",
+		k(string(copyValueKey)) + " Copy Raw Value  " + k(string(copyViewKey)) + " Copy View  " + k("s") + " Save value to file",
+		"In Scroll mode, " + k("←/→") + " Pan 8 columns  " + k("↑/↓") + " Scroll 4 lines",
+		k("Arrows/hjkl") + " Navigate payload text and trees  ·  h left, j down, k up, l right",
+		k("Alt+←/→") + " Pan 8 columns  " + k("Ctrl+←/→") + " Pan half the viewport  " + k("PgUp/PgDn") + " Page",
+		k("Space") + " Toggle Cursor  ·  In Cursor, " + k("Arrows/hjkl") + " Move  " + k("v") + " Toggle Selection",
+		"In Cursor and Selection, " + k("0") + " Line start  " + k("$") + " Line end",
+		"In Selection, " + k("Arrows/hjkl") + " Extend or shrink  " + k("Esc") + " Return to Cursor",
+		k("Shift+arrows") + " Extend selection  " + k("Ctrl+A") + " Select all  " + k("Ctrl+C") + " Copy selected text",
+		k("y") + " Yank and exit Selection  ·  In Scroll or Cursor, copy the selected text or the rendered view",
+		"In the tree, " + k("←/→") + " Collapse or expand nodes  " + k("Tab") + " Focus node text",
+		k("/") + " Search payload in Fullscreen  " + k("Enter") + " Return to payload  " + k("n") + " Next  " + k("p") + " Previous",
+		k("Alt+L") + " Load full if available  " + k("Enter") + " Confirm  " + k("Esc") + " Cancel",
+		"",
+		"Protobuf schema editor",
+		k("b") + " Browse schema  " + k("i") + " Add import folder  " + k("l") + " Load schema  " + k("a") + " Apply",
+		"",
 		"File browser",
-		k("Alt+P")+" Path  "+k("/")+" Filter  "+k("Alt+B")+" Files",
-		k("Enter")+" Open  "+k("u")+" Up  "+k("h")+" Home  "+k(".")+" Hidden files",
-	)
-	if api {
-		lines = append(lines, k("s")+" Choose folder when picking a directory")
+		k("Alt+P") + " Path  " + k("/") + " Filter  " + k("Alt+B") + " Files",
+		k("Enter") + " Open  " + k("u") + " Up  " + k("h") + " Home  " + k(".") + " Hidden files",
+		k("s") + " Choose folder when picking a directory",
 	}
 	text := tview.NewTextView().SetDynamicColors(true).SetWordWrap(true).SetText(strings.Join(lines, "\n"))
 	text.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey { return u.viewerKeys(e, nil, text) })
@@ -433,13 +419,9 @@ func (u *ui) palette() {
 	d := u.dialog("Help & Commands", list, list)
 	d.hint(keyHint("Enter") + " Run selected command  " + keyHint("Esc") + " Back")
 	add := func(label string, key rune, fn func()) { list.AddItem(label, "", key, func() { d.close(); fn() }) }
-	if u.b.backend != "cli" {
-		add("Topics", '1', func() { u.changeWorkspace(0) })
-	}
+	add("Topics", '1', func() { u.changeWorkspace(0) })
 	add("Consumer Groups", '2', func() { u.changeWorkspace(1) })
-	if u.b.backend != "cli" {
-		add("Messages", '3', func() { u.changeWorkspace(2) })
-	}
+	add("Messages", '3', func() { u.changeWorkspace(2) })
 	add("Refresh monitoring", 'r', u.requestRefresh)
 	add("Kafka clusters", '4', u.showClusters)
 	if u.workspace == 2 && len(u.records) > 0 {

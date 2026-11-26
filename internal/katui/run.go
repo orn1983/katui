@@ -44,7 +44,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	b := &broker{options: o}
 	if o.profileName != "" {
-		profiles, err := loadConnectionProfiles(o.backend)
+		profiles, err := loadConnectionProfiles()
 		if err != nil {
 			return err
 		}
@@ -91,9 +91,6 @@ func run(ctx context.Context, args []string) error {
 }
 
 func (b *broker) open() error {
-	if b.backend == "cli" {
-		return b.findCLI()
-	}
 	client, err := b.kafka(b.config)
 	if err != nil {
 		return err

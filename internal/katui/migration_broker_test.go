@@ -24,7 +24,7 @@ func migrationBroker(t *testing.T) (*broker, *kfake.Cluster, *kgo.Client) {
 	t.Helper()
 	c := kfake.MustCluster(kfake.NumBrokers(1), kfake.SeedTopics(2, migrationTopic))
 	t.Cleanup(c.Close)
-	b := &broker{options: options{backend: "api", brokers: c.ListenAddrs(), timeout: 2 * time.Second}}
+	b := &broker{options: options{brokers: c.ListenAddrs(), timeout: 2 * time.Second}}
 	if err := b.open(); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestAdminRequiresClusterIdentity(t *testing.T) {
 	defer cancel()
 	c := kfake.MustCluster(kfake.NumBrokers(1), kfake.ClusterID(""))
 	t.Cleanup(c.Close)
-	b := &broker{options: options{backend: "api", brokers: c.ListenAddrs(), timeout: 2 * time.Second}}
+	b := &broker{options: options{brokers: c.ListenAddrs(), timeout: 2 * time.Second}}
 	if err := b.open(); err != nil {
 		t.Fatal(err)
 	}

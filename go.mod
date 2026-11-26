@@ -5,6 +5,7 @@ go 1.26.11
 require (
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/gdamore/tcell/v2 v2.8.1
+	github.com/magiconair/properties v1.8.10
 	github.com/rivo/tview v0.42.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/twmb/franz-go v1.22.3

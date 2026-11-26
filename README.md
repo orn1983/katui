@@ -16,42 +16,30 @@ The screenshots use fictional data from a parcel delivery service.
 
 ## Build and install
 
-Use Go 1.26.11 or newer. Run `make` from the repository root to build `bin/katui`.
-
-```sh
-make
-./bin/katui
-```
-
-`make install` builds and installs Katui to `$HOME/.local/bin/katui`. Add `$HOME/.local/bin` to your `PATH` to run `katui` from any directory. Set `PREFIX` to choose another installation prefix, or `BINDIR` to choose the executable directory directly. For packaging, `DESTDIR` stages the install under a temporary root.
-
-The executable entry point is `main.go`. Kafka operations, the terminal UI, and their tests live in `internal/katui`. Kafka requests and record decoding use franz-go, the terminal UI uses tview and tcell, and local Protobuf support uses protocompile and the Go Protobuf runtime.
+With Go 1.26.11 or newer, run `make install` from the repository root. Add `$HOME/.local/bin` to your `PATH` and start `katui`. To run without installing, use `make` and `./bin/katui`. Set `PREFIX` or `BINDIR` to install elsewhere.
 
 ## Connect
 
-Run `./bin/katui` with no broker arguments to open connection setup or choose a saved cluster. Use ↓/`j` and ↑/`k` to select a profile, then press Enter or `c` to connect directly. Press `e` to edit the selected profile or `n` to open **Connect to Kafka** for a new one. If a saved profile needs a session password, Katui prompts for it and Enter connects. Press `4` or choose **Kafka clusters** from Help & Commands (`?`) to open the Clusters workspace. Use the workspace numbers shown along the top to switch directly, or press Esc to return to the previous workspace. Connecting to another cluster stops the current reader and opens a fresh view.
+Start `katui` to enter broker addresses or choose a saved cluster. Use **Connect** (Alt+C) to open the cluster. Select **Save profile** to reuse the connection. Katui prompts for a SASL password on reconnect unless you select **Remember password**, which writes it unencrypted to your private profile file.
 
-With no saved profiles, **Connect to Kafka** opens automatically. Press Alt+A to focus broker addresses or Alt+S for security in the API backend. Use `c` to connect when outside an input, Alt+C while typing, or Enter on the Connect button. Choose plaintext, TLS, SASL with TLS, SASL plaintext with SCRAM, or an existing client-config JSON file. The setup buttons open a file browser for TLS credentials and connection files.
-
-Choose **Save profile** and enter a name to keep the settings. With SASL, the profile asks for the password at the next connection unless you also select **Remember password**. A remembered password is written to the local profile JSON with private file permissions. Imported client configuration and TLS files are referenced by path. Profiles live in `$XDG_CONFIG_HOME/katui/connections.json`, falling back to `~/.config/katui/connections.json`. The CLI backend uses `cli-connections.json`.
-
-Use `-b` to supply broker addresses directly or `--cluster NAME` to select a saved profile. `--once` requires one of these options and a complete configuration. Esc cancels a pending connection. From the main view, `r` retries monitoring and `q` opens quit confirmation. Kafka clients need network access to the advertised broker addresses as well as the bootstrap address.
-
-Inspector preferences are keyed by the set of bootstrap addresses and the topic. When moving from an earlier Katui build, pass the same broker addresses with `-b` to reuse its saved profiles.
+To reuse a Kafka `.properties` file, choose **Import Kafka properties…** (Alt+I) in **Connect to Kafka**. Pick the file, review the populated form, and choose **Connect**. If the file omits `bootstrap.servers`, Katui keeps the brokers already in the form. You can enter them there too. Importing leaves **Remember password** off.
 
 ```sh
-./bin/katui -b broker.example.net:9092 -i 2
-./bin/katui -b broker.example.net:9092 -t orders -p 1
-./bin/katui -b broker.example.net:9092 -g billing -t orders
-./bin/katui -b broker.example.net:9092 --once -g billing
-./bin/katui -b broker.example.net:9092 --once -t orders
+katui -b broker.example.net:9092
+katui --cluster staging -g billing -t orders
+katui --cluster staging --once -t orders -p 1
 ```
 
-`--help` prints the available options. Interactive mode uses terminal stdin and stdout. `--once` writes JSON and can be redirected. Without a group or topic, its output is a list of group names.
+Use `--once` for a JSON snapshot. Pass `-g` for group offsets or `-t` for topic offsets. With neither flag, Katui lists consumer groups. Use `--help` for all options.
 
-### TLS and SASL
+<details>
+<summary>TLS, SASL, and supported connection files</summary>
 
-Pass a JSON file with `--client-config`. Omit fields you do not use. TLS uses system trust roots plus any PEM certificates in `ca_file`. Optional `cert_file` and `key_file` enable client authentication. `server_name` can set the TLS name explicitly. The supported SASL mechanisms are `PLAIN`, `SCRAM-SHA-256`, and `SCRAM-SHA-512`. `PLAIN` requires TLS. Each connection JSON or PEM file can be up to 1 MiB.
+Katui supports TLS with optional client certificates, SCRAM-SHA-256, SCRAM-SHA-512, and PLAIN over TLS. Imported PEM truststores use only the supplied CA file.
+
+The importer accepts connection settings such as `security.protocol`, file-based PEM truststores and keystores, and SCRAM or PLAIN credentials from a simple `sasl.jaas.config`. For a PEM store, set `ssl.truststore.type=PEM` or `ssl.keystore.type=PEM` and the corresponding `.location`. Relative paths start in the properties file’s directory. Import stops on unsupported keys or store types, including JKS and PKCS#12.
+
+For a JSON connection file, pass `--client-config path/to/client.json`.
 
 ```json
 {
@@ -65,67 +53,63 @@ Pass a JSON file with `--client-config`. Omit fields you do not use. TLS uses sy
 }
 ```
 
-`--size-client-config` accepts the same format. If supplied, it configures the separate log-directory client. Keep connection JSON files private.
+Omit fields you do not use. By default, a native JSON configuration adds `ca_file` to the system trust roots. For mutual TLS, set both `cert_file` and `key_file`. Use `--size-client-config` for separate disk-query credentials. Your machine must be able to reach the advertised broker addresses as well as the bootstrap address.
 
-### Kafka CLI backend
-
-```sh
-./bin/katui --backend cli -b localhost:9092 \
-  --kafka-cli /opt/kafka/bin/kafka-consumer-groups.sh \
-  --command-config /path/to/connection.properties
-```
-
-The CLI backend opens Consumer Groups (`2`) and provides the Clusters workspace (`4`). The executable can also be on PATH or under `$KAFKA_HOME/bin`. Topics, the record reader, and administration require the API backend.
+</details>
 
 ## Use
 
-- `2` opens Consumer Groups and `4` opens Clusters on either backend. The default API backend also offers Topics (`1`) and Messages (`3`). `/` searches, Enter opens or activates the focused item, and Esc goes back or cancels. Tab and Shift+Tab move focus. From a workspace or payload dialog, `?` or Ctrl+P opens Help & Commands. Choose **Keyboard shortcuts** or press `?` again for the shortcuts available on your backend.
-- Lists, viewers, and dialog buttons use the highlighted action keys. While typing, use the indicated Alt shortcuts or Tab to the button and press Enter.
-- In a topic or partition, `c` opens Consume. Space toggles a partition, `a` selects all, and `n` clears the selection. Choose **Live/end**, **Recent offsets**, **Retained beginning**, **Timestamp**, or **Exact offset**. **Keep following** controls whether the reader waits for new records after reaching the captured end offsets. Press Alt+C to start consuming from the partition list or while typing in a filter.
-- Choose **Exact offset** from Start and enter a nonnegative offset. Katui uses it inclusively in each selected partition. Select one partition to address a specific record. Katui reports the partition and available range if the requested offset is outside it. If the offset falls in a gap, reading begins at the next available record. An offset equal to the end starts an empty snapshot or follows new arrivals.
-- In Messages, `i` toggles between records and the payload inspector. Enter on a record or Tab also enters the inspector. `b` returns to records and `m` opens the format picker. With the record list focused, Space checks or unchecks the current record. Checked records keep a full-row highlight when you move the cursor. `a` selects all visible records up to the checked-record limits, and `n` clears the entire selection. `w` compares checked records. **Clear message buffer** is in Commands.
-- In Messages, `z` zooms the focused pane. With the records list focused, you can scroll and search at full width without loading payload previews. Press `z` or Esc to restore the split, or Enter to inspect the highlighted record. With the inspector focused, `z` opens the payload in Fullscreen. In the split view, the preview waits briefly for scrolling to settle. Enter or `i` starts loading the highlighted record immediately.
-- Messages stays on the current record as new records arrive. Press `f` to follow the newest visible record. The **Follow** checkbox shows the current mode.
-- The record reader uses partition fetches without group membership or offset commits. Kafka offsets are positions, so retained-count and rate displays are estimates.
-- From Topics, `n` creates a topic, `a` manages it, and `d` opens deletion. In Create and Configure, use `Alt+S` to stage a setting and `Alt+U` to unstage it. In Configure, `Alt+F` focuses the settings filter, `Alt+B` moves to the results, and `Alt+D` stages a return to the broker default. These shortcuts work while typing. Tab to a button and press Enter if you prefer.
-- In the topic operation menu, arrows highlight a choice, Enter selects it, and Esc keeps the current operation. The dialog title shows the selected operation and topic.
-- Use `Alt+R` to review topic or consumer group changes. Group administration opens with `a` from Consumer Groups. Type the exact target name and press `Alt+A` to apply, or press Enter to focus the confirmation button and Enter again to activate it. For topic deletion, the button reads **Delete topic**. Review and Apply both require Kafka to report a cluster ID. Apply checks it against the reviewed cluster before sending a write. Kafka writes make one request after revalidation. A timeout or partial response may have changed state and requires a fresh review.
-- Preferences live under `$XDG_CONFIG_HOME/katui/inspectors.json`, or `~/.config/katui/inspectors.json`. Use `--inspector-config` to select a preferences file. Local monitoring snapshots are stored under `$XDG_CACHE_HOME/katui/` or `~/.cache/katui/`. Katui skips the cache with `--no-cache`, custom security settings, or an API, disk, or CLI connection file.
+Press `1` for Topics, `2` for Consumer Groups, `3` for Messages, and `4` for Clusters. Use `/` to search, Enter to open, Esc to go back, and Tab to move focus. Press `?` for commands and `?` again for keyboard shortcuts. In Clusters, Enter connects, `e` edits a profile, and `n` starts a new connection.
 
 ### Check topic replication
 
-In Topics, **ISR/Replicas** counts in-sync replica assignments across all partitions. For example, a topic with two partitions and three replicas each shows `5/6` if one follower falls behind. **Affected P** counts partitions missing an in-sync replica or a leader. Open the topic to see each partition’s `ISR/RF`.
-
-A yellow row means one replica is missing on at least one partition. A red row means a partition has no leader, no in-sync replica, or at least two missing replicas. These colors use the existing topic metadata poll. A `?` means metadata is incomplete, `≥` gives the minimum known number of affected partitions, and `stale` marks the last known observation.
+**ISR/Replicas** totals in-sync replicas across a topic. **Affected P** counts partitions missing a replica or leader. Yellow means one replica is missing on at least one partition. Red means a partition has no leader, no in-sync replica, or at least two missing replicas. Open the topic to see which partition needs attention. A `?` marks incomplete metadata, `≥` gives a lower bound on affected partitions, and `stale` marks the last known observation.
 
 ### Configure topic retention
 
-From Topics, press `a` and choose **Configure topic**. Find `retention.ms` in **Current settings**. In the example below, **Display** shows `1w` and **Raw** shows `604800000`. Entering `2w` and pressing Alt+S stages a two-week retention period for review. The helper shows its exact value of 1,209,600,000 milliseconds.
-
-Both **Create topic** and **Configure topic** accept raw milliseconds or durations such as `90s`, `1h30m`, `1.2d`, and `6.5w`. Use `m` for minutes and `mo` for fixed 30-day months. The Display column uses the largest applicable unit. An `≈` marks a rounded display value. Staging and review retain millisecond precision.
+From Topics, press `a` and choose **Configure topic**. Press Alt+B, select `retention.ms`, then press Enter. In the example, **Display** shows `1w` and **Raw** shows `604800000`. Enter `2w` and press Alt+S to stage 1,209,600,000 milliseconds. You can also enter `90s`, `1h30m`, `1.2d`, or `6.5w`. Use `m` for minutes and `mo` for fixed 30-day months.
 
 ![The parcel.archive topic has a retention.ms value of 1w (604800000 milliseconds). A change to 2w (1209600000 milliseconds) is staged for review.](docs/screenshots/topic-settings.png)
 
+From Topics, `n` opens creation and `d` opens deletion. From Consumer Groups, `a` opens offset resets, group deletion, and rebalances. The group must be empty before you reset its offsets or delete it. Rebalancing removes the current members of a classic consumer group so they can rejoin. For any administrative change, press Alt+R to review, type the exact target name, and press Alt+A to apply. If a write times out or partially succeeds, check the resulting state before reviewing again.
+
+<details>
+<summary>Editing and confirming changes</summary>
+
+In **Configure topic**, Alt+F filters the settings list and Alt+B focuses the results. Alt+D stages a return to the broker default and Alt+U unstages a change. A displayed `≈` indicates rounding. Review shows the exact value sent to Kafka.
+
+Review and Apply check the cluster identity and the state of the target. If either has changed since review, open a fresh review before applying.
+
+</details>
+
 ### Monitor consumer rates
 
-Opening a consumer group starts sampling its partitions at the configured interval (`-i`, five seconds by default). You can open other groups, read records, or work in a dialog and then return to see the intervening history. Each chart keeps up to 90 samples. Groups you only pass over in a list follow that list’s refresh schedule. Katui stops tracking a group when Kafka confirms its deletion or a complete group listing omits it. Switching clusters or quitting ends all background sampling.
-
-Open a group with Enter and press Enter on a partition to inspect its lag, owner, offsets, and consumption chart. A blank column means there is no rate sample. A heavier segment (`━`) in the bottom border marks a measured zero. Missing samples leave the ordinary border (`─`) in place. A positive rate draws a bar, even when it is small relative to the peak. **Offset discontinuities** counts samples where the committed offset or log end moved backward. Katui resets the affected rate history and lag baseline when that happens.
+Open a consumer group, then a partition, to see its lag, owner, consumption rate, and catch-up ETA. Katui samples opened groups every five seconds by default, including while you browse elsewhere. Set `-i` to change the interval. The chart keeps 90 samples. A heavy mark on its bottom border is a measured zero. A blank column with an ordinary border means the sample is missing. An **Offset discontinuity** means the committed offset or log end moved backward. Katui starts a new rate history and lag baseline for that partition. Switching clusters or quitting ends background sampling.
 
 ![The parcel-tracker group is consuming 4,260 messages per second on partition 2. Its throughput chart shows bursts up to 9,640 per second and brief drops to zero.](docs/screenshots/consumer-lag.png)
 
 ### Inspect, copy, and export payloads
 
+From a topic or partition, press `c`, toggle partitions with Space, choose where to start, and press Alt+C. Read from the end, recent offsets, the retained beginning, a timestamp, or an exact offset. Select a single partition to look up a specific record. Exact offsets are inclusive. If an offset falls in a gap, reading starts at the next available record. **Keep following** continues reading new arrivals. The reader fetches records without joining a consumer group or committing offsets.
+
 ![A parcel dispatch selected in the message list beside its JSON tree. The expanded route from North hub to Harbor depot is also shown as formatted JSON below the tree.](docs/screenshots/record-inspector.png)
 
-- Use `m` to pick Raw, JSON formatted text or tree, CSV table or pivot, or Protobuf JSON or tree. In CSV, `d` sets the delimiter, Alt+H toggles the header row, and `o` sets column names. In Protobuf, `u` opens the schema editor. Load a `.proto` or descriptor set (`.pb`, `.desc`, or `.protoset`), then choose a message type and wire format and apply.
-- Fullscreen defaults to 8 MiB of structured input and 32 MiB of rendered text. The scrolling inspector uses the first 64 KiB of each record for its preview. Set `--structured-input-mib` and `--rendered-output-mib` to choose limits from 1 to 128 MiB. When the larger limits can reveal more, press Alt+L and then Enter to confirm in place. This raises both limits to 128 MiB for JSON, CSV, Protobuf, or raw text. Esc cancels the prompt or a running load and keeps Fullscreen open. Some decoder calls finish in the background after cancellation.
-- Press `/` in the inspector or comparison to open payload search in Fullscreen. From Fullscreen, `/` focuses search, and `n` or `p` move through matches. Fullscreen keeps at most 10,000 matches and one million text lines. CSV displays at most 50,000 rows and 256 columns. Trees display at most 50,000 nodes and 128 levels per record. The view reports when a limit is reached.
-- Messages shows temporary storage usage and marks each record **Complete** or **Preview only**. Set `--payload-storage-mib` to change the default 128 MiB quota per instance. `0` disables temporary storage while keeping inline values and previews. A warning appears when a value cannot fit. Katui cleans up temporary payloads on normal exit.
-- Payload text starts in Scroll mode. Left/Right pan eight columns, Up/Down scroll four rows, and Page Up/Down move by a page. `h`, `j`, `k`, and `l` work like Left, Down, Up, and Right. Space enters Cursor mode for character-by-character movement. In Cursor mode, `v` starts Selection, where arrows extend or shrink the selection. In either mode, `0` moves to the start of the current line and `$` moves to its end. Press `v` again or Esc to return to Cursor and keep the selection. Space returns to Scroll from either mode. Entering Cursor or Selection, selecting with the mouse, or pressing Ctrl+A in the inspector pins the current record while the reader continues. Press `f` to follow the newest record again.
-- Alt+Left/Right pan eight columns in any mode. Ctrl+Left/Right pan half the visible width, with a minimum of eight columns. Drag with the mouse, hold Shift while using the arrows, or use Ctrl+A to select all displayed text. Press Ctrl+C to copy selected text. In Selection mode, `y` copies the selected text, clears the highlight, and returns to Cursor. In Scroll or Cursor, `y` copies any selected text or the rendered view. In a tree, ↓/`j` and ↑/`k` move between visible nodes. Left/`h` collapses a node or moves to its parent. Right/`l` expands a node or moves to its first child. Tab or click focuses the selected node’s text for scrolling, selection, and copying.
-- `g` runs **Copy Raw Value** for the complete retained text. `.` runs **Copy View** for the rendered text. Both are also available in Help & Commands (`?`) and report an error if their source is incomplete. `s` saves a complete retained value byte for byte, including binary values. From a comparison, choose a record first. Type a new path on the machine running Katui and press Enter to save.
-- Local macOS uses `pbcopy` when available. SSH and the fallback use terminal clipboard transfer (OSC 52), which requires terminal or multiplexer support and has a 64 KiB limit in Katui. Use Export for larger copies over SSH or binary payloads.
+- **Browse.** Use `i` to switch between records and inspector, `z` to zoom the focused pane, and `f` to follow the newest record. Space checks records in the list, `a` checks all visible records up to the selection limit, `n` clears the selection, and `w` compares checked records.
+- **Decode.** Press `m` for Raw, JSON text or tree, CSV table or pivot, or Protobuf JSON or tree. CSV supports custom delimiters (`d`) and column names (`o`). Alt+H toggles the CSV header row. In Protobuf, press `u` to load a local `.proto` or descriptor set and select the message type.
+- **Search and copy.** In the inspector, `/` opens fullscreen search. Use `n` and `p` for matches. Use `g` to copy the complete raw text, `.` for the rendered view, or `s` to save the retained value, including binary data. In a tree, arrows expand or collapse nodes and Tab focuses the selected node’s text.
+
+<details>
+<summary>Large payloads, selection, and local storage</summary>
+
+The split inspector previews the first 64 KiB. Zoom the inspector with `z` to open Fullscreen. It defaults to 8 MiB of structured input and 32 MiB of rendered output. When a larger limit can reveal more, press Alt+L and Enter to raise both limits to 128 MiB for that load. Use `--structured-input-mib` and `--rendered-output-mib` to change the defaults. Fullscreen search keeps up to 10,000 matches. CSV renders up to 50,000 rows and 256 columns, and trees up to 50,000 nodes and 128 levels per record.
+
+Use `--payload-storage-mib` to change the 128 MiB temporary storage quota. **Preview only** identifies a record whose complete value could not be retained. For text selection, drag with the mouse or press Space for Cursor mode, then `v` and the arrows to extend a selection. Ctrl+C copies the selected text. When using the terminal clipboard over SSH, use `s` to save values larger than 64 KiB.
+
+Alt+Left/Right pans eight columns. Ctrl+Left/Right pans half a viewport. In Cursor mode, `0` and `$` jump to the beginning and end of a line. Selecting text pins the current record while new messages arrive. Press `f` to follow again.
+
+Saved profiles and inspector preferences live in `$XDG_CONFIG_HOME/katui/` (default `~/.config/katui/`). Use `--inspector-config` to choose another inspector settings file. Cached group snapshots live in `$XDG_CACHE_HOME/katui/` (default `~/.cache/katui/`). Use `--no-cache` to disable them.
+
+</details>
 
 ## Verification
 
@@ -135,10 +119,4 @@ go vet ./...
 govulncheck ./...
 ```
 
-The default suite covers large payloads, temporary storage, clipboard paths, changed administration reviews, partial replies, timeouts, and snapshot recovery after reconnecting. The tests that require a Kafka broker are opt-in. Use a disposable cluster and credentials with permissions to create, configure, produce to, and delete temporary topics and manage temporary test groups.
-
-```sh
-KATUI_TEST_BROKER=localhost:9092 go test -race ./...
-```
-
-These tests cover validate-only topic creation, finite filtered reading with a retained large payload, unchanged group commits after reading, timestamp reset with a missing-timestamp fallback, rejection of a stale reset review, staged configuration, classic group rebalance, and topic and group deletion.
+To include broker integration tests, set `KATUI_TEST_BROKER` to a disposable Kafka broker. These tests create, configure, and delete topics, produce records, and change consumer groups and offsets.

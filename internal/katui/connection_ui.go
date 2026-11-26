@@ -29,7 +29,7 @@ func (u *ui) showClusters() {
 		return
 	}
 	starting := len(u.b.brokers) == 0
-	profiles, err := loadConnectionProfiles(u.b.backend)
+	profiles, err := loadConnectionProfiles()
 	if starting && len(profiles) == 0 {
 		u.connectionDialog("", connectionProfile{}, errorText(err))
 		return
@@ -77,7 +77,7 @@ func (u *ui) showClusters() {
 		opts := u.b.options
 		opts.profileName = name
 		if !starting {
-			opts.config, opts.commandConfig, opts.security, opts.sizeConfig = "", "", nil, ""
+			opts.config, opts.security, opts.sizeConfig = "", nil, ""
 		}
 		if err := opts.selectConnection(profile); err != nil {
 			if errors.Is(err, errProfilePassword) && profile.Security != nil {
@@ -111,7 +111,7 @@ func (u *ui) showClusters() {
 			label += " · current"
 		}
 		description := safe(strings.Join(profile.Brokers, ", "), false)
-		if profile.PromptPassword && u.b.backend != "cli" {
+		if profile.PromptPassword {
 			description += " · password required"
 		}
 		list.AddItem(tview.Escape(label), tview.Escape(description), 0, nil)
@@ -273,7 +273,6 @@ func (u *ui) openConnection(d *dialog, ctx context.Context, opts options, done f
 
 func (u *ui) connectionDialog(name string, saved connectionProfile, notice string) {
 	starting := len(u.b.brokers) == 0
-	cli := u.b.backend == "cli"
 	form := tview.NewForm().SetItemPadding(0)
 	title := "Connect to Kafka"
 	if name != "" {
@@ -287,56 +286,61 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 	if starting && u.modalDepth == 1 {
 		d.cancel = stop
 	}
-	brokers := tview.NewInputField().SetLabel(buttonLabel("Brokers", "Alt+A")).SetText(strings.Join(saved.Brokers, ", "))
+	brokers := tview.NewInputField().SetLabel(buttonLabel("Brokers", "Alt+A"))
 	profileName := tview.NewInputField().SetLabel(buttonLabel("Profile name", "Alt+N")).SetText(name)
 	save := tview.NewCheckbox().SetLabel(buttonLabel("Save profile", "Alt+V")).SetChecked(name != "")
 	remember := tview.NewCheckbox().SetLabel(buttonLabel("Remember password", "Alt+Y"))
-	credentials := &securityConfig{}
-	if saved.Security != nil {
-		credentials = saved.Security
-	}
-	remember.SetChecked(credentials.SASL.Password != "")
-
-	path := saved.ClientConfig
-	if cli {
-		path = saved.CommandConfig
-	}
-	if starting {
-		if cli && u.b.commandConfig != "" {
-			path = u.b.commandConfig
-		}
-		if !cli && u.b.config != "" {
-			path = u.b.config
-		}
-	}
-	configLabel := "Client config JSON"
-	if cli {
-		configLabel = "Kafka CLI properties"
-	}
-	config := tview.NewInputField().SetLabel(configLabel).SetText(path)
-	ca := tview.NewInputField().SetLabel("CA certificate").SetText(credentials.CAFile)
-	cert := tview.NewInputField().SetLabel("Client certificate").SetText(credentials.CertFile)
-	key := tview.NewInputField().SetLabel("Client private key").SetText(credentials.KeyFile)
-	serverName := tview.NewInputField().SetLabel(buttonLabel("TLS server name", "Alt+H")).SetText(credentials.ServerName)
-	username := tview.NewInputField().SetLabel(buttonLabel("Username", "Alt+U")).SetText(credentials.SASL.Username)
-	password := tview.NewInputField().SetLabel(buttonLabel("Password", "Alt+P")).SetMaskCharacter('•').SetText(credentials.SASL.Password)
+	config := tview.NewInputField().SetLabel("Client config JSON")
+	ca := tview.NewInputField().SetLabel("CA certificate")
+	caOnly := tview.NewCheckbox().SetLabel(buttonLabel("Trust only this CA file", "Alt+O"))
+	cert := tview.NewInputField().SetLabel("Client certificate")
+	key := tview.NewInputField().SetLabel("Client private key")
+	serverName := tview.NewInputField().SetLabel(buttonLabel("TLS server name", "Alt+H"))
+	username := tview.NewInputField().SetLabel(buttonLabel("Username", "Alt+U"))
+	passwordLabel := buttonLabel("Password", "Alt+P")
+	var password *tview.InputField
 	mechanisms := []string{"SCRAM-SHA-256", "SCRAM-SHA-512", "PLAIN"}
-	mechanism := tview.NewDropDown().SetLabel(buttonLabel("SASL mechanism", "Alt+M")).SetOptions(mechanisms, nil).
-		SetCurrentOption(indexOf(mechanisms, strings.ToUpper(credentials.SASL.Mechanism)))
+	mechanism := tview.NewDropDown().SetLabel(buttonLabel("SASL mechanism", "Alt+M"))
 	mode := connectionPlain
-	switch {
-	case path != "":
-		mode = connectionFile
-	case credentials.SASL.Mechanism != "" && credentials.TLS:
-		mode = connectionSASLTLS
-	case credentials.SASL.Mechanism != "":
-		mode = connectionSASLPlain
-	case credentials.TLS || credentials.CAFile != "" || credentials.CertFile != "" || credentials.ServerName != "":
-		mode = connectionTLS
-	}
 	protocol := tview.NewDropDown().SetLabel(buttonLabel("Security", "Alt+S")).SetOptions([]string{
 		"Plaintext", "TLS", "SASL + TLS", "SASL plaintext", "Client config file",
-	}, nil).SetCurrentOption(mode)
+	}, nil)
+
+	fillConnection := func(profile connectionProfile, rememberPassword bool) {
+		security := profile.Security
+		if security == nil {
+			security = &securityConfig{}
+		}
+		if len(profile.Brokers) > 0 {
+			brokers.SetText(strings.Join(profile.Brokers, ", "))
+		}
+		config.SetText(profile.ClientConfig)
+		ca.SetText(security.CAFile)
+		caOnly.SetChecked(security.CAFileOnly)
+		cert.SetText(security.CertFile)
+		key.SetText(security.KeyFile)
+		serverName.SetText(security.ServerName)
+		username.SetText(security.SASL.Username)
+		// A fresh masked field also drops the previous credential's undo history.
+		password = tview.NewInputField().SetLabel(passwordLabel).SetText(security.SASL.Password).SetMaskCharacter('•')
+		remember.SetChecked(rememberPassword && security.SASL.Password != "")
+
+		tls := security.TLS || security.CAFile != "" || security.CAFileOnly || security.CertFile != "" || security.KeyFile != "" || security.ServerName != ""
+		switch {
+		case profile.ClientConfig != "":
+			mode = connectionFile
+		case security.SASL.Mechanism != "" && tls:
+			mode = connectionSASLTLS
+		case security.SASL.Mechanism != "":
+			mode = connectionSASLPlain
+		case tls:
+			mode = connectionTLS
+		default:
+			mode = connectionPlain
+		}
+		mechanism.SetOptions(mechanisms, nil).SetCurrentOption(indexOf(mechanisms, strings.ToUpper(security.SASL.Mechanism)))
+		protocol.SetCurrentOption(mode)
+	}
 
 	checking := false
 	var connectButton *tview.Button
@@ -345,7 +349,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			return
 		}
 		opts := u.b.options
-		opts.config, opts.commandConfig, opts.security = "", "", nil
+		opts.config, opts.security = "", nil
 		if !starting {
 			opts.sizeConfig = ""
 		}
@@ -367,18 +371,17 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			return filepath.Abs(expandHome(value))
 		}
 		var err error
-		switch {
-		case cli:
-			opts.commandConfig, err = filePath(config)
-		case mode == connectionFile:
+		switch mode {
+		case connectionFile:
 			opts.config, err = filePath(config)
 			if err == nil && opts.config == "" {
 				d.say("Choose a Kafka client config JSON file.")
 				return
 			}
-		case mode != connectionPlain:
+		case connectionTLS, connectionSASLTLS, connectionSASLPlain:
 			security := &securityConfig{TLS: mode == connectionTLS || mode == connectionSASLTLS}
 			if security.TLS {
+				security.CAFileOnly = caOnly.IsChecked()
 				if security.CAFile, err = filePath(ca); err == nil {
 					if security.CertFile, err = filePath(cert); err == nil {
 						security.KeyFile, err = filePath(key)
@@ -413,7 +416,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 				return
 			}
 			if storeProfile {
-				profiles, err := loadConnectionProfiles(opts.backend)
+				profiles, err := loadConnectionProfiles()
 				if err == nil && opts.profileName != name {
 					if _, exists := profiles[opts.profileName]; exists {
 						err = fmt.Errorf("a profile named %q already exists. Select it in Clusters and press e to edit it", opts.profileName)
@@ -424,7 +427,7 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 						delete(profiles, name)
 					}
 					profiles[opts.profileName] = opts.connectionProfile(rememberPassword)
-					err = saveConnectionProfiles(opts.backend, profiles)
+					err = saveConnectionProfiles(profiles)
 				}
 				if err != nil {
 					candidate.close()
@@ -442,6 +445,21 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		cancelLabel = "Quit"
 	}
 	cancelButton := d.button(cancelLabel, "Esc", d.cancel)
+	importProperties := d.button("Import Kafka properties…", "Alt+I", func() {
+		if checking {
+			return
+		}
+		u.fileBrowser(filePicker{title: "Import Kafka properties", accept: func(string) bool { return true }}, func(path string) {
+			profile, err := readKafkaProperties(path)
+			if err != nil {
+				d.say("Import failed: " + err.Error())
+				return
+			}
+			fillConnection(profile, false)
+			focusForm(u, form, 0)
+			d.say("Properties imported. Review the settings and choose Connect when ready.")
+		})
+	})
 	browse := func(input *tview.InputField, title string) func() {
 		return func() {
 			if checking {
@@ -462,15 +480,12 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		focused, _ := form.GetFocusedItemIndex()
 		usesTLS := mode == connectionTLS || mode == connectionSASLTLS
 		usesSASL := mode == connectionSASLTLS || mode == connectionSASLPlain
-		form.Clear(false).AddFormItem(brokers)
-		if !cli {
-			form.AddFormItem(protocol)
-		}
-		if cli || mode == connectionFile {
+		form.Clear(false).AddFormItem(brokers).AddFormItem(protocol)
+		if mode == connectionFile {
 			form.AddFormItem(config)
 		}
 		if usesTLS {
-			form.AddFormItem(ca).AddFormItem(cert).AddFormItem(key).AddFormItem(serverName)
+			form.AddFormItem(ca).AddFormItem(caOnly).AddFormItem(cert).AddFormItem(key).AddFormItem(serverName)
 		}
 		if usesSASL {
 			selection, _ := mechanism.GetCurrentOption()
@@ -485,17 +500,24 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		if usesSASL && saveProfile {
 			form.AddFormItem(remember)
 		}
-		d.footer.Clear()
+		d.footer.Clear().SetDirection(tview.FlexRow)
+		primary, files := tview.NewFlex(), tview.NewFlex()
+		d.footer.AddItem(primary, 1, 0, false)
+		if usesTLS || mode == connectionFile {
+			d.footer.AddItem(files, 1, 0, false)
+		}
+		d.root.ResizeItem(d.footer, d.footer.GetItemCount(), 0)
 		for _, action := range []struct {
 			button  *tview.Button
 			visible bool
+			row     *tview.Flex
 		}{
-			{connectButton, true}, {cancelButton, true}, {browseConfig, cli || mode == connectionFile},
-			{browseCA, usesTLS}, {browseCert, usesTLS}, {browseKey, usesTLS},
+			{connectButton, true, primary}, {cancelButton, true, primary}, {importProperties, true, primary},
+			{browseConfig, mode == connectionFile, files}, {browseCA, usesTLS, files}, {browseCert, usesTLS, files}, {browseKey, usesTLS, files},
 		} {
 			action.button.SetDisabled(!action.visible || checking && action.button != cancelButton)
 			if action.visible {
-				d.footer.AddItem(action.button, tview.TaggedStringWidth(action.button.GetLabel())+2, 0, false)
+				action.row.AddItem(action.button, tview.TaggedStringWidth(action.button.GetLabel())+2, 0, false)
 			}
 		}
 		if focused >= 0 {
@@ -511,9 +533,9 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			d.say("Connect once without saving.")
 		}
 	})
-	fieldShortcuts := map[rune]tview.FormItem{
-		'a': brokers, 's': protocol, 'n': profileName, 'h': serverName,
-		'm': mechanism, 'u': username, 'p': password,
+	fieldShortcuts := map[rune]string{
+		'a': brokers.GetLabel(), 's': protocol.GetLabel(), 'n': profileName.GetLabel(), 'h': serverName.GetLabel(),
+		'm': mechanism.GetLabel(), 'u': username.GetLabel(), 'p': passwordLabel,
 	}
 	d.keymap(func(e *tcell.EventKey) bool {
 		if e.Key() == tcell.KeyCtrlC {
@@ -534,13 +556,17 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 			return true
 		}
 		shortcut := alt(e)
-		if item, ok := fieldShortcuts[shortcut]; ok {
-			focusForm(u, form, form.GetFormItemIndex(item.GetLabel()))
+		if label, ok := fieldShortcuts[shortcut]; ok {
+			focusForm(u, form, form.GetFormItemIndex(label))
 			return true
 		}
 		switch shortcut {
 		case 'g':
 			connect()
+		case 'o':
+			if form.GetFormItemIndex(caOnly.GetLabel()) >= 0 {
+				caOnly.SetChecked(!caOnly.IsChecked())
+			}
 		case 'v':
 			save.SetChecked(!save.IsChecked())
 		case 'y':
@@ -552,7 +578,10 @@ func (u *ui) connectionDialog(name string, saved connectionProfile, notice strin
 		}
 		return true
 	})
-	render(save.IsChecked())
+	if starting && u.b.config != "" {
+		saved.ClientConfig = u.b.config
+	}
+	fillConnection(saved, true)
 	u.app.SetFocus(form)
 	if notice == "" {
 		d.hint("Enter host:port or comma-separated brokers.\n" + keyHint("Tab") + " Next field  " + keyHint("Alt+C") + " Connect while typing")

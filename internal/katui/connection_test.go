@@ -49,7 +49,6 @@ func TestCachePolicy(t *testing.T) {
 		{[]string{"--no-cache"}, true},
 		{[]string{"--client-config", "client.json"}, true},
 		{[]string{"--size-client-config", "client.json"}, true},
-		{[]string{"--backend", "cli", "--command-config", "client.properties"}, true},
 	}
 	for _, tt := range tests {
 		o, err := arguments(tt.args, io.Discard)
@@ -79,10 +78,10 @@ func TestSavedClusterCredentials(t *testing.T) {
 		"ask":        options.connectionProfile(false),
 		"remembered": options.connectionProfile(true),
 	}
-	if err := saveConnectionProfiles("api", profiles); err != nil {
+	if err := saveConnectionProfiles(profiles); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := loadConnectionProfiles("api")
+	saved, err := loadConnectionProfiles()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,10 +103,6 @@ func TestSavedClusterCredentials(t *testing.T) {
 	}
 	if fresh.cluster != "a.example.net:9093,b.example.net:9093" || !fresh.noCache {
 		t.Fatalf("profile did not preserve inspector key or authenticated cache policy: %q, %t", fresh.cluster, fresh.noCache)
-	}
-	otherBackend, err := loadConnectionProfiles("cli")
-	if err != nil || len(otherBackend) != 0 {
-		t.Fatal("API profiles leaked into CLI profiles")
 	}
 	if err := run(t.Context(), []string{"--once", "--cluster", "ask"}); !errors.Is(err, errProfilePassword) {
 		t.Fatalf("noninteractive lookup = %v", err)

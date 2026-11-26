@@ -22,13 +22,10 @@ type options struct {
 	topic       string
 	partition   int
 
-	backend       string
-	config        string
-	security      *securityConfig
-	sizeConfig    string
-	inspector     string
-	cli           string
-	commandConfig string
+	config     string
+	security   *securityConfig
+	sizeConfig string
+	inspector  string
 
 	interval                        time.Duration
 	timeout                         time.Duration
@@ -72,13 +69,10 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	flags.IntVar(&outputMiB, "rendered-output-mib", defaultRenderedOutput>>20, "fullscreen rendered payload limit in MiB")
 	flags.Int64Var(&storageMiB, "payload-storage-mib", payloadQuota>>20, "temporary storage for complete payloads in MiB (0 disables spilling)")
 	flags.StringVar(&o.profileName, "cluster", "", "choose a named saved cluster")
-	flags.StringVar(&o.view, "view", "", "initial view: groups or topics (API backend only for topics)")
-	flags.StringVar(&o.backend, "backend", "api", "api for all features, or cli for consumer group monitoring")
+	flags.StringVar(&o.view, "view", "", "initial view: topics or groups")
 	flags.StringVar(&o.config, "client-config", "", "JSON broker connection settings")
 	flags.StringVar(&o.sizeConfig, "size-client-config", "", "JSON disk query connection settings")
 	flags.StringVar(&o.inspector, "inspector-config", defaultPath("XDG_CONFIG_HOME", ".config", "inspectors.json"), "inspector preferences")
-	flags.StringVar(&o.cli, "kafka-cli", "", "path to kafka-consumer-groups.sh")
-	flags.StringVar(&o.commandConfig, "command-config", "", "Kafka CLI connection properties")
 	flags.BoolVar(&o.noCacheFlag, "no-cache", false, "disable monitoring cache")
 	flags.BoolVar(&o.once, "once", false, "print one JSON snapshot")
 	flags.BoolVar(&o.version, "version", false, "print version")
@@ -111,22 +105,13 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	if o.partition < -1 || o.partition > math.MaxInt32 || (o.partition >= 0 && o.topic == "" && o.group == "") {
 		return o, errors.New("partition must be nonnegative and requires a topic or group")
 	}
-	if o.backend != "api" && o.backend != "cli" {
-		return o, errors.New("--backend must be api or cli")
-	}
 	if o.view != "" && o.view != "topics" && o.view != "groups" {
 		return o, errors.New("--view must be topics or groups")
-	}
-	if o.backend == "api" && (o.cli != "" || o.commandConfig != "") {
-		return o, errors.New("--kafka-cli and --command-config require CLI backend")
-	}
-	if o.backend == "cli" && (o.config != "" || o.sizeConfig != "" || o.view == "topics" || (o.topic != "" && o.group == "")) {
-		return o, errors.New("CLI backend supports group monitoring and --command-config")
 	}
 	o.setCachePolicy()
 	if o.view == "" {
 		o.view = "topics"
-		if o.group != "" || o.backend == "cli" {
+		if o.group != "" {
 			o.view = "groups"
 		}
 	}

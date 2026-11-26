@@ -13,7 +13,7 @@ import (
 func BenchmarkBufferedMessageScroll(b *testing.B) {
 	for _, layout := range []string{"split", "zoom"} {
 		b.Run(layout, func(b *testing.B) {
-			backend := &broker{options: options{noCache: true, backend: "api", interval: time.Hour}}
+			backend := &broker{options: options{noCache: true, interval: time.Hour}}
 			u := newUI(b.Context(), backend)
 			// The Messages workspace needs an active connection, but browsing
 			// already buffered records does not issue any broker requests.

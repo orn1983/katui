@@ -121,7 +121,7 @@ func TestKafkaFiniteReaderIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	o := options{brokers: []string{address}, cluster: address, backend: "api", timeout: 5 * time.Second}
+	o := options{brokers: []string{address}, cluster: address, timeout: 5 * time.Second}
 	opts, err := o.kafkaOptions("")
 	if err != nil {
 		t.Fatal(err)

@@ -124,17 +124,6 @@ func (u *ui) pollWatchedGroups() {
 		u.nextWatchTick.Store(earliest.UnixNano())
 		return
 	}
-	// The API batches groups. The CLI starts processes per group, so give
-	// the longest-waiting group its own timeout and then service the next.
-	if u.b.backend == "cli" {
-		oldest := names[0]
-		for _, name := range names[1:] {
-			if u.watchedGroups[name].next.Before(u.watchedGroups[oldest].next) {
-				oldest = name
-			}
-		}
-		names = []string{oldest}
-	}
 	ctx, cancel := context.WithTimeout(u.ctx, u.b.timeout)
 	poll := &groupPoll{groups: make(map[string]*groupWatch, len(names)), cancel: cancel}
 	for _, name := range names {
@@ -177,7 +166,7 @@ func (u *ui) loadCache() {
 	if u.b.noCache {
 		return
 	}
-	path := cachePath(u.b.backend, u.b.cluster)
+	path := cachePath(u.b.cluster)
 	data, err := readLimited(path, 16<<20)
 	if err != nil {
 		return
@@ -207,11 +196,11 @@ func (u *ui) saveCache() {
 		}
 	}
 	u.cacheBusy = true
-	backend, cluster := u.b.backend, u.b.cluster
+	path := cachePath(u.b.cluster)
 	go func() {
 		data, err := json.Marshal(c)
 		if err == nil && len(data) <= 16<<20 {
-			_ = atomicFile(cachePath(backend, cluster), data)
+			_ = atomicFile(path, data)
 		}
 		u.post(func() { u.cacheBusy = false })
 	}()
@@ -551,8 +540,9 @@ func errorText(err error) string {
 	return err.Error()
 }
 
-func cachePath(backend, cluster string) string {
-	return defaultPath("XDG_CACHE_HOME", ".cache", "monitor-"+shortHash(backend+" "+cluster)+".json")
+func cachePath(cluster string) string {
+	// Keep the existing on-disk key for native Kafka snapshots.
+	return defaultPath("XDG_CACHE_HOME", ".cache", "monitor-"+shortHash("api "+cluster)+".json")
 }
 
 func (u *ui) eraseTopic(name string) {

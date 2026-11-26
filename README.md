@@ -2,6 +2,10 @@
 
 Katui is a Go terminal application for browsing Kafka topics, monitoring consumer groups, reading records, inspecting payloads, and reviewing Kafka administration changes.
 
+![Katui’s Topics view shows partition counts, message rates, and disk usage. The parcel.scans row is yellow because 35 of its 36 replicas are in sync.](docs/screenshots/topics.png)
+
+The screenshots use fictional data from a parcel delivery service.
+
 ## Build and install
 
 Use Go 1.26.11 or newer. Run `make` from the repository root to build `bin/katui`.
@@ -78,7 +82,6 @@ The CLI backend opens Consumer Groups (`2`) and provides the Clusters workspace 
 - From Topics, `n` creates a topic, `a` manages it, and `d` opens deletion. In Create and Configure, use `Alt+S` to stage a setting and `Alt+U` to unstage it. In Configure, `Alt+F` focuses the settings filter, `Alt+B` moves to the results, and `Alt+D` stages a return to the broker default. These shortcuts work while typing. Tab to a button and press Enter if you prefer.
 - In the topic operation menu, arrows highlight a choice, Enter selects it, and Esc keeps the current operation. The dialog title shows the selected operation and topic.
 - Use `Alt+R` to review topic or consumer group changes. Group administration opens with `a` from Consumer Groups. Type the exact target name and press `Alt+A` to apply, or press Enter to focus the confirmation button and Enter again to activate it. For topic deletion, the button reads **Delete topic**. Review and Apply both require Kafka to report a cluster ID. Apply checks it against the reviewed cluster before sending a write. Kafka writes make one request after revalidation. A timeout or partial response may have changed state and requires a fresh review.
-- In **Configure topic**, the Display column shows `.ms` settings in the largest applicable unit. The Raw column shows the exact Kafka value. In **Create topic** and **Configure topic**, enter raw milliseconds or a duration such as `90s`, `1h30m`, `1.2d`, or `6.5w`. The helper shows the accepted units and the exact milliseconds as you type. Use `m` for minutes and `mo` for fixed 30-day months. An `≈` marks a rounded display value. Staging and review retain millisecond precision.
 - Preferences live under `$XDG_CONFIG_HOME/katui/inspectors.json`, or `~/.config/katui/inspectors.json`. Use `--inspector-config` to select a preferences file. Local monitoring snapshots are stored under `$XDG_CACHE_HOME/katui/` or `~/.cache/katui/`. Katui skips the cache with `--no-cache`, custom security settings, or an API, disk, or CLI connection file.
 
 ### Check topic replication
@@ -87,13 +90,25 @@ In Topics, **ISR/Replicas** counts in-sync replica assignments across all partit
 
 A yellow row means one replica is missing on at least one partition. A red row means a partition has no leader, no in-sync replica, or at least two missing replicas. These colors use the existing topic metadata poll. A `?` means metadata is incomplete, `≥` gives the minimum known number of affected partitions, and `stale` marks the last known observation.
 
+### Configure topic retention
+
+From Topics, press `a` and choose **Configure topic**. Find `retention.ms` in **Current settings**. In the example below, **Display** shows `1w` and **Raw** shows `604800000`. Entering `2w` and pressing Alt+S stages a two-week retention period for review. The helper shows its exact value of 1,209,600,000 milliseconds.
+
+Both **Create topic** and **Configure topic** accept raw milliseconds or durations such as `90s`, `1h30m`, `1.2d`, and `6.5w`. Use `m` for minutes and `mo` for fixed 30-day months. The Display column uses the largest applicable unit. An `≈` marks a rounded display value. Staging and review retain millisecond precision.
+
+![The parcel.archive topic has a retention.ms value of 1w (604800000 milliseconds). A change to 2w (1209600000 milliseconds) is staged for review.](docs/screenshots/topic-settings.png)
+
 ### Monitor consumer rates
 
 Opening a consumer group starts sampling its partitions at the configured interval (`-i`, five seconds by default). You can open other groups, read records, or work in a dialog and then return to see the intervening history. Each chart keeps up to 90 samples. Groups you only pass over in a list follow that list’s refresh schedule. Katui stops tracking a group when Kafka confirms its deletion or a complete group listing omits it. Switching clusters or quitting ends all background sampling.
 
 Open a group with Enter and press Enter on a partition to inspect its lag, owner, offsets, and consumption chart. A blank column means there is no rate sample. A heavier segment (`━`) in the bottom border marks a measured zero. Missing samples leave the ordinary border (`─`) in place. A positive rate draws a bar, even when it is small relative to the peak. **Offset discontinuities** counts samples where the committed offset or log end moved backward. Katui resets the affected rate history and lag baseline when that happens.
 
+![The parcel-tracker group is consuming 4,260 messages per second on partition 2. Its throughput chart shows bursts up to 9,640 per second and brief drops to zero.](docs/screenshots/consumer-lag.png)
+
 ### Inspect, copy, and export payloads
+
+![A parcel dispatch selected in the message list beside its JSON tree. The expanded route from North hub to Harbor depot is also shown as formatted JSON below the tree.](docs/screenshots/record-inspector.png)
 
 - Use `m` to pick Raw, JSON formatted text or tree, CSV table or pivot, or Protobuf JSON or tree. In CSV, `d` sets the delimiter, Alt+H toggles the header row, and `o` sets column names. In Protobuf, `u` opens the schema editor. Load a `.proto` or descriptor set (`.pb`, `.desc`, or `.protoset`), then choose a message type and wire format and apply.
 - Fullscreen defaults to 8 MiB of structured input and 32 MiB of rendered text. The scrolling inspector uses the first 64 KiB of each record for its preview. Set `--structured-input-mib` and `--rendered-output-mib` to choose limits from 1 to 128 MiB. When the larger limits can reveal more, press Alt+L and then Enter to confirm in place. This raises both limits to 128 MiB for JSON, CSV, Protobuf, or raw text. Esc cancels the prompt or a running load and keeps Fullscreen open. Some decoder calls finish in the background after cancellation.

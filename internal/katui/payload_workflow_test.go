@@ -293,6 +293,34 @@ type clipboardScreen struct {
 
 func (s clipboardScreen) SetClipboard(data []byte) { s.copied <- string(data) }
 
+func TestFullscreenSearchMatchKeys(t *testing.T) {
+	u, screen, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	record := retainedRecord(t, nil, []byte("N1 N2 N3"))
+	var p *payloadPane
+	u.post(func() { p = u.payloadDialog(true, []*storedRecord{record}, "raw") })
+	clusterKey(t, screen, tcell.KeyRune, '/', 0)
+	clusterKey(t, screen, tcell.KeyRune, 'N', tcell.ModShift)
+	waitKeyboardState(t, u, "Find did not accept uppercase N as search text", func() bool {
+		return p.search.GetText() == "N" && len(p.textMatches) == 3 && p.match == 0
+	})
+	clusterKey(t, screen, tcell.KeyEnter, 0, 0)
+	for _, step := range []struct {
+		key  rune
+		mod  tcell.ModMask
+		want int
+	}{
+		{'N', tcell.ModShift, 2},
+		{'N', 0, 1}, // Some terminals send the uppercase rune without a Shift modifier.
+		{'p', 0, 0},
+		{'n', 0, 1},
+	} {
+		clusterKey(t, screen, tcell.KeyRune, step.key, step.mod)
+		waitKeyboardState(t, u, "wrong match after pressing "+string(step.key), func() bool {
+			return p.viewer.HasFocus() && p.match == step.want
+		})
+	}
+}
+
 func TestFullViewSearchClearsObsoleteMatch(t *testing.T) {
 	u, _, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
 	record := retainedRecord(t, nil, []byte("first payload"))

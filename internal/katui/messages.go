@@ -391,6 +391,11 @@ func (u *ui) payloadDialog(full bool, records []*storedRecord, mode string) *pay
 		}
 		key := shortcutRune(ev)
 		switch key {
+		case 'N':
+			if full {
+				p.advance(-1)
+				return true
+			}
 		case '/':
 			if full {
 				u.app.SetFocus(p.search)

@@ -2,7 +2,6 @@ package katui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -33,6 +32,7 @@ type payloadPane struct {
 	loadCanceled                             bool
 	search                                   *tview.InputField
 	tree                                     *tview.TreeView
+	deepestWidget                            int
 	delimButton, headerButton, profileButton *tview.Button
 	records                                  []*storedRecord
 	full, comparison, metadataTab            bool
@@ -41,10 +41,9 @@ type payloadPane struct {
 	renderJob                                *payloadRenderJob
 	searchCancel, nodeCancel                 context.CancelFunc
 	revision, searchRevision, nodeRevision   uint64
-	textMatches                              [][]int
+	textMatches                              [][2]int
 	treeMatches                              []*payloadNode
 	match                                    int
-	matchesLimited                           bool
 	rendering                                bool
 	previewTimer                             *time.Timer
 	previewHidden                            bool
@@ -103,6 +102,14 @@ func (u *ui) newPayloadPane(full, comparison bool, records []*storedRecord) *pay
 
 func (p *payloadPane) newTreeView() *tview.TreeView {
 	tree := tview.NewTreeView()
+	p.deepestWidget = 0
+	tree.SetDrawFunc(func(_ tcell.Screen, x, y, width, height int) (int, int, int, int) {
+		// Deep connector columns can run outside the viewport and stall
+		// tview's drawing loop. Align labels when indentation crowds them out.
+		clipped := width == 0 || p.deepestWidget*3 >= max(1, width-12)
+		tree.SetGraphics(!clipped).SetAlign(clipped)
+		return x, y, width, height
+	})
 	tree.SetFocusFunc(p.updateNavigation)
 	tree.SetInputCapture(func(e *tcell.EventKey) *tcell.EventKey {
 		current := tree.GetCurrentNode()
@@ -469,12 +476,7 @@ func (p *payloadPane) renderAfter(delay time.Duration) {
 	run := func() {
 		defer cancel()
 		result := p.u.preparePayload(ctx, records, preferences, mode, p.full, len(records) > 1 || p.comparison, limits)
-		doc, capped := indexPayloadText(ctx, result.text)
-		if capped {
-			result.incomplete = true
-			result.warning += "\nDisplay limited to 1,000,000 lines. Export for the original."
-		}
-		result.text = doc.text
+		doc := indexPayloadText(ctx, result.text)
 		var metadata string
 		if inspector {
 			if ctx.Err() != nil {
@@ -552,17 +554,19 @@ func (n *payloadNode) treeWidget() *tview.TreeNode {
 	return n.widget
 }
 
-func (n *payloadNode) materialize() {
+func (p *payloadPane) materialize(n *payloadNode) {
 	w := n.treeWidget()
 	if len(w.GetChildren()) == 0 {
-		for _, child := range n.children {
+		for _, child := range n.childNodes() {
+			child.widgetDepth = n.widgetDepth + 1
+			p.deepestWidget = max(p.deepestWidget, child.widgetDepth)
 			w.AddChild(child.treeWidget())
 		}
 	}
 }
 
 func (p *payloadPane) showNode(n *payloadNode) {
-	n.materialize()
+	p.materialize(n)
 	if p.nodeCancel != nil {
 		p.nodeCancel()
 	}
@@ -578,7 +582,7 @@ func (p *payloadPane) showNode(n *payloadNode) {
 	limit := p.u.b.inspectionLimits(p.full, p.expanded).rendered
 	go func() {
 		defer cancel()
-		raw, err := json.Marshal(n.value)
+		raw, err := marshalJSONNode(ctx, n.value, limit)
 		var text string
 		if err == nil {
 			text, err = prettyJSON(ctx, raw, limit)
@@ -588,11 +592,11 @@ func (p *payloadPane) showNode(n *payloadNode) {
 		}
 		out := renderText{limit: limit}
 		out.writeSafe(ctx, text)
-		doc, linesLimited := indexPayloadText(ctx, out.String())
+		doc := indexPayloadText(ctx, out.String())
 		p.u.post(func() {
 			if p.nodeRevision == generation && ctx.Err() == nil {
 				p.nodeView.setDocument(doc)
-				if linesLimited || out.limited {
+				if out.limited {
 					p.notice("Node text reached the display limit. Select a smaller branch.")
 				}
 			}
@@ -609,7 +613,7 @@ func (p *payloadPane) showMetadata(on bool) {
 			out.WriteString(metadataText(r))
 			out.WriteString("\n\n")
 		}
-		doc, _ := indexPayloadText(p.u.ctx, out.String())
+		doc := indexPayloadText(p.u.ctx, out.String())
 		p.viewer.setDocument(doc)
 	} else {
 		p.viewer.setDocument(p.document)
@@ -621,12 +625,7 @@ func (p *payloadPane) showMetadata(on bool) {
 }
 
 func (p *payloadPane) canLoadFull() bool {
-	if !p.full || p.rendering {
-		return false
-	}
-	limits := p.u.b.inspectionLimits(p.full, false)
-	canRaiseLimits := limits.structured < maxInspectionBytes || limits.rendered < maxInspectionBytes
-	return p.result.canExpand && !p.expanded && canRaiseLimits
+	return p.full && !p.rendering && !p.expanded && p.result.canExpand
 }
 
 func (p *payloadPane) updateLoadButton() {
@@ -676,7 +675,7 @@ func (p *payloadPane) loadFull() {
 	d.footer.Clear()
 	load := d.button("Load", "Enter", func() { p.confirmLoad(true) })
 	d.button("Cancel", "Esc", func() { p.confirmLoad(false) })
-	d.hint(fmt.Sprintf("Load up to %d MiB each for input and display?\nParsing can use additional memory.", maxInspectionBytes>>20))
+	d.hint("Load the entire retained payload?\nParsing and formatting may use substantial memory.")
 	p.u.app.SetFocus(load)
 }
 
@@ -707,7 +706,6 @@ func (p *payloadPane) scheduleSearch() {
 	p.match = -1
 	p.textMatches = nil
 	p.treeMatches = nil
-	p.matchesLimited = false
 	p.viewer.match = [2]int{}
 	if query == "" {
 		p.showRenderStatus()
@@ -738,33 +736,29 @@ func (p *payloadPane) scheduleSearch() {
 			})
 			return
 		}
-		const maxSearchMatches = 10_000
-		var positions [][]int
+		var positions [][2]int
 		var matches []*payloadNode
-		limited := false
 		if tree != nil {
-			var visit func(*payloadNode)
-			visit = func(n *payloadNode) {
-				if limited || ctx.Err() != nil {
-					return
-				}
+			stack := []*payloadNode{tree}
+			for len(stack) > 0 && ctx.Err() == nil {
+				n := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
 				if pattern.MatchString(n.search) {
-					if len(matches) == maxSearchMatches {
-						limited = true
-						return
-					}
 					matches = append(matches, n)
 				}
-				for _, c := range n.children {
-					visit(c)
+				children := n.childNodes()
+				for i := len(children) - 1; i >= 0; i-- {
+					stack = append(stack, children[i])
 				}
 			}
-			visit(tree)
 		} else {
-			positions = pattern.FindAllStringIndex(text, maxSearchMatches+1)
-			if len(positions) > maxSearchMatches {
-				positions = positions[:maxSearchMatches]
-				limited = true
+			for offset := 0; offset < len(text) && ctx.Err() == nil; {
+				hit := pattern.FindStringIndex(text[offset:])
+				if hit == nil {
+					break
+				}
+				positions = append(positions, [2]int{offset + hit[0], offset + hit[1]})
+				offset += hit[1]
 			}
 		}
 		if ctx.Err() != nil {
@@ -776,7 +770,6 @@ func (p *payloadPane) scheduleSearch() {
 			}
 			p.textMatches = positions
 			p.treeMatches = matches
-			p.matchesLimited = limited
 			p.advance(1)
 		})
 	}()
@@ -796,11 +789,7 @@ func (p *payloadPane) advance(change int) {
 	} else {
 		p.match = (p.match + change + total) % total
 	}
-	suffix := ""
-	if p.matchesLimited {
-		suffix = "+"
-	}
-	p.status.SetText(fmt.Sprintf("Match %d / %d%s  ·  ", p.match+1, total, suffix) + keyHint("n") + " Next  " + keyHint("p") + " Previous")
+	p.status.SetText(fmt.Sprintf("Match %d / %d  ·  ", p.match+1, total) + keyHint("n") + " Next  " + keyHint("p") + " Previous")
 	if len(p.treeMatches) > 0 {
 		node := p.treeMatches[p.match]
 		path := []*payloadNode{node}
@@ -809,7 +798,7 @@ func (p *payloadPane) advance(change int) {
 		}
 		for i := len(path) - 1; i >= 0; i-- {
 			n := path[i]
-			n.materialize()
+			p.materialize(n)
 			if i > 0 {
 				n.widget.Expand()
 			}
@@ -818,7 +807,7 @@ func (p *payloadPane) advance(change int) {
 		p.showNode(node)
 	} else {
 		hit := p.textMatches[p.match]
-		p.viewer.match = [2]int{hit[0], hit[1]}
+		p.viewer.match = hit
 		p.viewer.selectBy(hit[0], false)
 	}
 }

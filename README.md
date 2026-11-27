@@ -101,7 +101,7 @@ From a topic or partition, press `c`, toggle partitions with Space, choose where
 <details>
 <summary>Large payloads, selection, and local storage</summary>
 
-The split inspector previews the first 64 KiB. Zoom the inspector with `z` to open Fullscreen. It defaults to 8 MiB of structured input and 32 MiB of rendered output. When a larger limit can reveal more, press Alt+L and Enter to raise both limits to 128 MiB for that load. Use `--structured-input-mib` and `--rendered-output-mib` to change the defaults. Fullscreen search keeps up to 10,000 matches. CSV renders up to 50,000 rows and 256 columns, and trees up to 50,000 nodes and 128 levels per record.
+The split inspector previews the first 64 KiB. Press `z` for Fullscreen, where you can expand and search the entire JSON tree, including collapsed branches. Fullscreen starts with an 8 MiB structured-input budget and a 32 MiB rendered-output budget. If the payload exceeds either, press Alt+L and Enter to load the retained value using available memory. Use `--structured-input-mib` and `--rendered-output-mib` to change the initial budgets. CSV displays up to 50,000 rows and 256 columns.
 
 Use `--payload-storage-mib` to change the 128 MiB temporary storage quota. **Preview only** identifies a record whose complete value could not be retained. For text selection, drag with the mouse or press Space for Cursor mode, then `v` and the arrows to extend a selection. Ctrl+C copies the selected text. When using the terminal clipboard over SSH, use `s` to save values larger than 64 KiB.
 

@@ -14,7 +14,12 @@ import (
 
 func waitKeyboardState(t *testing.T, u *ui, failure string, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	waitUIState(t, u, 3*time.Second, failure, condition)
+}
+
+func waitUIState(t *testing.T, u *ui, timeout time.Duration, failure string, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		var ok bool
 		if !u.post(func() { ok = condition() }) {

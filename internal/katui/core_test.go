@@ -87,11 +87,11 @@ func TestCSVAndFullTree(t *testing.T) {
 	tree, _ := buildTree(context.Background(), "root", values, true)
 	var verify func(*payloadNode) bool
 	verify = func(n *payloadNode) bool {
-		if len(n.children) > 100 {
+		if len(n.childNodes()) > 100 {
 			t.Fatal("unbounded tree fanout")
 		}
 		found := strings.Contains(n.search, "needle")
-		for _, child := range n.children {
+		for _, child := range n.childNodes() {
 			if child.parent != n {
 				t.Fatal("lost search path")
 			}

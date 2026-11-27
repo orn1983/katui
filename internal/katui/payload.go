@@ -8,9 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -27,11 +28,8 @@ const (
 	defaultStructuredInput = 8 << 20
 	maxPreviewOutput       = 8 << 20
 	maxPreviewInput        = 2 << 20
-	maxFullTreeNodes       = 50_000
-	maxFullTreeDepth       = 128
 	maxFullCSVRows         = 50_000
 	maxFullCSVColumns      = 256
-	maxInspectionBytes     = 128 << 20
 )
 
 func validMode(mode string) bool {
@@ -65,21 +63,11 @@ type payloadNode struct {
 	value         any
 	parent        *payloadNode
 	children      []*payloadNode
+	lazyChildren  func() []*payloadNode
 	widget        *tview.TreeNode
+	widgetDepth   int
 }
 
-func jsonValue(value []byte) (any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	decoder.UseNumber()
-	var obj any
-	if err := decoder.Decode(&obj); err != nil {
-		return nil, err
-	}
-	if decoder.Decode(new(any)) != io.EOF {
-		return nil, errors.New("trailing data after JSON value")
-	}
-	return obj, nil
-}
 func prettyValue(value any) string {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
@@ -94,17 +82,61 @@ func prettyValue(value any) string {
 var errRenderLimit = errors.New("formatted JSON exceeds the display limit")
 
 func prettyJSON(ctx context.Context, value []byte, limit int) (string, error) {
-	if len(value) > limit {
-		return "", errRenderLimit
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	// json.Indent only accepts a bytes.Buffer. Bound its output first,
-	// including indentation at each delimiter outside a quoted string.
-	estimate, depth := len(value), 0
-	quoted, escaped := false, false
-	for i, ch := range value {
+	// The standard validator is fast on ordinary documents; its scanner also
+	// rejects very deep valid JSON, which the token walker can validate.
+	if !json.Valid(value) {
+		if err := walkJSONTokens(ctx, value, nil); err != nil {
+			return "", err
+		}
+	}
+
+	var out strings.Builder
+	var padding []byte
+	depth := 0
+	newline := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		available := limit - out.Len()
+		if available < 1 || depth > (available-1)/2 {
+			return errRenderLimit
+		}
+		for len(padding)/2 < depth {
+			padding = append(padding, ' ', ' ')
+		}
+		out.WriteByte('\n')
+		out.Write(padding[:2*depth])
+		return nil
+	}
+	// Keep scalar spellings, duplicate keys, order and trailing whitespace.
+	trailing := len(bytes.TrimRight(value, " \t\r\n"))
+	quoted, escaped, afterOpen := false, false, false
+	for i, ch := range value[:trailing] {
 		if i%32768 == 0 && ctx.Err() != nil {
 			return "", ctx.Err()
 		}
+		if !quoted {
+			indent := afterOpen
+			switch ch {
+			case ' ', '\t', '\r', '\n':
+				continue
+			case '}', ']':
+				depth--
+				indent = !afterOpen // Keep empty containers on one line.
+			}
+			if indent {
+				if err := newline(); err != nil {
+					return "", err
+				}
+			}
+		}
+		if out.Len() >= limit {
+			return "", errRenderLimit
+		}
+		out.WriteByte(ch)
 		if quoted {
 			switch {
 			case escaped:
@@ -116,31 +148,28 @@ func prettyJSON(ctx context.Context, value []byte, limit int) (string, error) {
 			}
 			continue
 		}
+		afterOpen = false
 		switch ch {
 		case '"':
 			quoted = true
 		case '{', '[':
 			depth++
-			if depth > maxFullTreeDepth {
-				return "", errors.New("JSON nesting exceeds the display limit")
-			}
-			estimate += 1 + 2*depth
-		case '}', ']':
-			depth = max(0, depth-1)
-			estimate += 1 + 2*depth
+			afterOpen = true
 		case ',':
-			estimate += 1 + 2*depth
+			if err := newline(); err != nil {
+				return "", err
+			}
 		case ':':
-			estimate++
-		}
-		if estimate > limit {
-			return "", errRenderLimit
+			if out.Len() >= limit {
+				return "", errRenderLimit
+			}
+			out.WriteByte(' ')
 		}
 	}
-	var out bytes.Buffer
-	if err := json.Indent(&out, value, "", "  "); err != nil {
-		return "", err
+	if len(value)-trailing > limit-out.Len() {
+		return "", errRenderLimit
 	}
+	out.Write(value[trailing:])
 	return out.String(), ctx.Err()
 }
 func shortened(s string, n int) string {
@@ -155,117 +184,124 @@ func shortened(s string, n int) string {
 	}
 	return s
 }
-func buildTree(ctx context.Context, label string, value any, full bool) (*payloadNode, bool) {
-	maxNodes, maxDepth := 2000, 30
-	if full {
-		maxNodes, maxDepth = maxFullTreeNodes, maxFullTreeDepth
+
+// objectRange shares the sorted keys and backing map of a wide JSON object.
+type objectRange struct {
+	object map[string]any
+	keys   []string
+}
+
+func newTreeNode(label string, value any, parent *payloadNode) *payloadNode {
+	n := &payloadNode{label: shortened(label, 240), value: value, parent: parent, search: label}
+	switch v := value.(type) {
+	case map[string]any:
+		n.label += fmt.Sprintf(" {%d}", len(v))
+	case []any:
+		n.label += fmt.Sprintf(" [%d]", len(v))
+	case string:
+		n.search += " " + v
+		n.label += " = " + prettyValue(shortened(v, 240))
+	default:
+		text := prettyValue(v)
+		n.search += " " + text
+		n.label += " = " + text
 	}
+	return n
+}
+
+func (n *payloadNode) childNodes() []*payloadNode {
+	if n.lazyChildren != nil {
+		return n.lazyChildren()
+	}
+	return n.children
+}
+
+// Browsing and background search share node identities so a search result can
+// be expanded and selected even if its branch has never been opened.
+func fullTreeNode(label string, value any, parent *payloadNode) *payloadNode {
+	n := newTreeNode(label, value, parent)
+	switch v := value.(type) {
+	case []any:
+		n.lazyChildren = sync.OnceValue(func() []*payloadNode { return n.arrayChildren(v, 0) })
+	case map[string]any:
+		n.lazyChildren = sync.OnceValue(func() []*payloadNode { return n.objectChildren(v, sortedKeys(v)) })
+	}
+	return n
+}
+
+func (n *payloadNode) arrayChildren(values []any, offset int) []*payloadNode {
+	var children []*payloadNode
+	step := rangeSize(len(values))
+	for i := 0; i < len(values); i += step {
+		first := offset + i
+		if step == 1 {
+			children = append(children, fullTreeNode(fmt.Sprintf("[%d]", first), values[i], n))
+			continue
+		}
+		items := values[i:min(i+step, len(values))]
+		group := &payloadNode{label: fmt.Sprintf("[%d … %d]", first, first+len(items)-1), parent: n, value: items}
+		group.lazyChildren = sync.OnceValue(func() []*payloadNode { return group.arrayChildren(items, first) })
+		children = append(children, group)
+	}
+	return children
+}
+
+func (n *payloadNode) objectChildren(object map[string]any, keys []string) []*payloadNode {
+	var children []*payloadNode
+	step := rangeSize(len(keys))
+	for i := 0; i < len(keys); i += step {
+		if step == 1 {
+			key := keys[i]
+			children = append(children, fullTreeNode(key, object[key], n))
+			continue
+		}
+		names := keys[i:min(i+step, len(keys))]
+		group := &payloadNode{label: names[0] + " … " + names[len(names)-1], parent: n, value: objectRange{object, names}}
+		group.lazyChildren = sync.OnceValue(func() []*payloadNode { return group.objectChildren(object, names) })
+		children = append(children, group)
+	}
+	return children
+}
+
+func buildTree(ctx context.Context, label string, value any, full bool) (*payloadNode, bool) {
+	if full {
+		root := fullTreeNode(label, value, nil)
+		root.childNodes() // Sort a wide root object on the render worker.
+		return root, false
+	}
+	const maxNodes, maxDepth = 2000, 30
 	count := 0
 	limited := false
-	canAdd := func() bool {
-		if ctx.Err() != nil || count >= maxNodes {
-			limited = true
-			return false
-		}
-		return true
-	}
 	var build func(string, any, *payloadNode, int) *payloadNode
 	build = func(label string, value any, parent *payloadNode, depth int) *payloadNode {
+		n := newTreeNode(label, value, parent)
 		count++
-		node := &payloadNode{label: shortened(label, 240), value: value, parent: parent, search: label}
-		switch value := value.(type) {
-		case map[string]any:
-			node.label += fmt.Sprintf(" {%d}", len(value))
-		case []any:
-			node.label += fmt.Sprintf(" [%d]", len(value))
-		default:
-			display := value
-			if text, ok := value.(string); ok {
-				node.search += " " + text
-				display = shortened(text, 240)
-			} else {
-				node.search += " " + prettyValue(value)
+		canAdd := func() bool {
+			if depth >= maxDepth || count >= maxNodes || ctx.Err() != nil {
+				limited = true
+				return false
 			}
-			node.label += " = " + prettyValue(display)
-			return node
-		}
-		if depth >= maxDepth || !canAdd() {
-			limited = true
-			return node
+			return true
 		}
 		switch v := value.(type) {
 		case []any:
-			step := rangeSize(len(v))
-			for first := 0; first < len(v); first += step {
+			for i, item := range v {
 				if !canAdd() {
 					break
 				}
-				if !full || step == 1 {
-					if !full {
-						step = 1
-					}
-					node.children = append(node.children, build(fmt.Sprintf("[%d]", first), v[first], node, depth+1))
-					continue
-				}
-				last := min(first+step, len(v))
-				group := &payloadNode{label: fmt.Sprintf("[%d … %d]", first, last-1), parent: node, value: v[first:last]}
-				count++
-				var ranges func(*payloadNode, int, int)
-				ranges = func(parent *payloadNode, lo, hi int) {
-					size := rangeSize(hi - lo)
-					for i := lo; i < hi; i += size {
-						if !canAdd() {
-							return
-						}
-						if size == 1 {
-							parent.children = append(parent.children, build(fmt.Sprintf("[%d]", i), v[i], parent, depth+1))
-							continue
-						}
-						end := min(hi, i+size)
-						n := &payloadNode{label: fmt.Sprintf("[%d … %d]", i, end-1), parent: parent, value: v[i:end]}
-						count++
-						parent.children = append(parent.children, n)
-						ranges(n, i, end)
-					}
-				}
-				ranges(group, first, last)
-				node.children = append(node.children, group)
+				n.children = append(n.children, build(fmt.Sprintf("[%d]", i), item, n, depth+1))
 			}
 		case map[string]any:
-			keys := make([]string, 0, len(v))
-			for k := range v {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			var ranges func(*payloadNode, []string)
-			ranges = func(parent *payloadNode, keys []string) {
-				step := 1
-				if full {
-					step = rangeSize(len(keys))
-				}
-				for first := 0; first < len(keys); first += step {
+			if len(v) > 0 && canAdd() {
+				for _, key := range sortedKeys(v) {
 					if !canAdd() {
 						break
 					}
-					if step == 1 {
-						key := keys[first]
-						parent.children = append(parent.children, build(key, v[key], parent, depth+1))
-						continue
-					}
-					last := min(first+step, len(keys))
-					subset := map[string]any{}
-					for _, k := range keys[first:last] {
-						subset[k] = v[k]
-					}
-					n := &payloadNode{label: fmt.Sprintf("%s … %s", keys[first], keys[last-1]), parent: parent, value: subset}
-					count++
-					parent.children = append(parent.children, n)
-					ranges(n, keys[first:last])
+					n.children = append(n.children, build(key, v[key], n, depth+1))
 				}
 			}
-			ranges(node, keys)
 		}
-		return node
+		return n
 	}
 	return build(label, value, nil, 0), limited
 }
@@ -516,7 +552,7 @@ func csvTable(ctx context.Context, sets []csvData, combined bool, limit int) (st
 				}
 				if i+1 < len(widths) {
 					padding := max(0, w-uniseg.StringWidth(cell))
-					out.WriteString(strings.Repeat(" ", min(padding, out.limit-out.builder.Len()+1)))
+					out.WriteString(strings.Repeat(" ", min(padding, out.limit-out.builder.Len())))
 					out.WriteString(" │ ")
 				}
 				if out.limited {
@@ -566,7 +602,7 @@ type payloadLimits struct {
 
 func (o options) inspectionLimits(full, expanded bool) payloadLimits {
 	if full && expanded {
-		return payloadLimits{maxInspectionBytes, maxInspectionBytes}
+		return payloadLimits{math.MaxInt, math.MaxInt}
 	}
 	limits := payloadLimits{o.structuredInput, o.renderedOutput}
 	if limits.structured == 0 {
@@ -607,11 +643,15 @@ func renderValue(ctx context.Context, r *storedRecord, limit int) ([]byte, bool,
 	}
 	defer file.Close()
 	// Read one extra byte so that a valid UTF-8 sequence may be cut cleanly.
-	value, err := io.ReadAll(io.LimitReader(contextReader{ctx, file}, int64(limit)+1))
+	readSize := min(limit, r.valueSize)
+	if readSize < math.MaxInt {
+		readSize++
+	}
+	value, err := io.ReadAll(io.LimitReader(contextReader{ctx, file}, int64(readSize)))
 	if err != nil {
 		return nil, false, err
 	}
-	if len(value) != min(r.valueSize, limit+1) {
+	if len(value) != min(r.valueSize, readSize) {
 		return nil, false, errors.New("retained payload changed while reading")
 	}
 	if len(value) <= limit {
@@ -773,16 +813,12 @@ func (u *ui) preparePayload(ctx context.Context, records []*storedRecord, profil
 		}
 		if err == nil && treeMode(mode) && ctx.Err() == nil {
 			var obj any
-			obj, err = jsonValue(value)
+			obj, err = jsonValueContext(ctx, value)
 			if err == nil {
 				node, limited := buildTree(ctx, id, obj, full)
 				nodes = append(nodes, node)
 				if limited {
-					if full {
-						notices = append(notices, "Tree limited to 50,000 nodes and 128 levels.")
-					} else {
-						notices = append(notices, "Tree preview limited to 2,000 nodes and 30 levels. Press z in the payload pane for Fullscreen.")
-					}
+					notices = append(notices, "Tree preview limited to 2,000 nodes and 30 levels. Press z in the payload pane for Fullscreen.")
 				}
 			}
 		}

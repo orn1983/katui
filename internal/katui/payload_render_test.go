@@ -1,7 +1,11 @@
 package katui
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,16 +13,34 @@ import (
 	"unicode/utf8"
 )
 
-func TestJSONDisplayDepth(t *testing.T) {
-	n := maxFullTreeDepth
-	nested := func(n int) []byte {
-		return []byte(strings.Repeat("[", n) + `"A quoted [bracket], a \" quote and a \\ slash"` + strings.Repeat("]", n))
+func TestPrettyJSONKeepsStructureAndLiteralsWithinBudget(t *testing.T) {
+	for _, raw := range []string{
+		" \n" + `{"x":[], "x":[{}, 1e002, "escaped \" [{:}] \\ \u00fe", true, null]}` + "\t\r\n",
+		strings.Repeat("[", 200) + `"leaf"` + strings.Repeat("]", 200),
+	} {
+		var want bytes.Buffer
+		if err := json.Indent(&want, []byte(raw), "", "  "); err != nil {
+			t.Fatal(err)
+		}
+		got, err := prettyJSON(t.Context(), []byte(raw), want.Len())
+		if err != nil || got != want.String() {
+			t.Fatalf("formatted JSON differs from json.Indent (error %v)", err)
+		}
+		if _, err := prettyJSON(t.Context(), []byte(raw), want.Len()-1); !errors.Is(err, errRenderLimit) {
+			t.Fatalf("formatting over the display budget: %v", err)
+		}
 	}
-	if _, err := prettyJSON(t.Context(), nested(n), 1<<20); err != nil {
-		t.Fatalf("formatting at the depth limit: %v", err)
+}
+
+func TestPrettyJSONBeyondStandardNesting(t *testing.T) {
+	const depth = 10_001
+	raw := []byte(strings.Repeat("[", depth) + "1" + strings.Repeat("]", depth))
+	// Use a small display budget so the test doesn't need 200 MB of padding.
+	if _, err := prettyJSON(t.Context(), raw, len(raw)*2); !errors.Is(err, errRenderLimit) {
+		t.Fatalf("deep valid JSON should reach the output budget: %v", err)
 	}
-	if _, err := prettyJSON(t.Context(), nested(n+1), 1<<20); err == nil {
-		t.Fatal("expected an error above the display depth limit")
+	if _, err := prettyJSON(t.Context(), raw[:len(raw)-1], math.MaxInt); err == nil || errors.Is(err, errRenderLimit) {
+		t.Fatalf("incomplete JSON accepted as valid: %v", err)
 	}
 }
 
@@ -43,6 +65,10 @@ func TestBoundedDisplayKeepsOriginalPayload(t *testing.T) {
 	prefix, limited, err := renderValue(context.Background(), record, 4)
 	if err != nil || !limited || string(prefix) != "abc" {
 		t.Fatalf("display prefix %q, limited %t, error %v", prefix, limited, err)
+	}
+	display, limited, err := renderValue(t.Context(), record, math.MaxInt)
+	if err != nil || limited || string(display) != value {
+		t.Fatalf("full display %q, limited %t, error %v", display, limited, err)
 	}
 	full, err := record.full()
 	if err != nil || string(full) != value {

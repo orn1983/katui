@@ -65,8 +65,8 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	}
 	flags.Float64Var(&timeout, "timeout", 20, "request timeout in seconds")
 	flags.Float64Var(&size, "size-interval", 30, "disk sampling interval in seconds")
-	flags.IntVar(&inputMiB, "structured-input-mib", defaultStructuredInput>>20, "fullscreen structured payload input limit in MiB")
-	flags.IntVar(&outputMiB, "rendered-output-mib", defaultRenderedOutput>>20, "fullscreen rendered payload limit in MiB")
+	flags.IntVar(&inputMiB, "structured-input-mib", defaultStructuredInput>>20, "initial fullscreen structured input budget in MiB")
+	flags.IntVar(&outputMiB, "rendered-output-mib", defaultRenderedOutput>>20, "initial fullscreen rendered output budget in MiB")
 	flags.Int64Var(&storageMiB, "payload-storage-mib", payloadQuota>>20, "temporary storage for complete payloads in MiB (0 disables spilling)")
 	flags.StringVar(&o.profileName, "cluster", "", "choose a named saved cluster")
 	flags.StringVar(&o.view, "view", "", "initial view: topics or groups")
@@ -85,8 +85,8 @@ func arguments(args []string, stderr io.Writer) (options, error) {
 	if o.version {
 		return o, nil
 	}
-	if inputMiB < 1 || inputMiB > maxInspectionBytes>>20 || outputMiB < 1 || outputMiB > maxInspectionBytes>>20 {
-		return o, fmt.Errorf("payload input and display limits must be 1–%d MiB", maxInspectionBytes>>20)
+	if inputMiB < 1 || inputMiB > math.MaxInt>>20 || outputMiB < 1 || outputMiB > math.MaxInt>>20 {
+		return o, fmt.Errorf("initial payload budgets must be 1–%d MiB", math.MaxInt>>20)
 	}
 	if storageMiB < 0 || storageMiB > 1<<20 {
 		return o, errors.New("payload storage must be 0–1048576 MiB")

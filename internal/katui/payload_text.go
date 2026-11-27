@@ -11,7 +11,6 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-const maxPayloadLines = 1_000_000
 const columnCheckpointBytes = 256
 
 type payloadColumn struct {
@@ -27,11 +26,11 @@ type payloadDocument struct {
 	columns map[int][]payloadColumn
 }
 
-func indexPayloadText(ctx context.Context, text string) (payloadDocument, bool) {
+func indexPayloadText(ctx context.Context, text string) payloadDocument {
 	d := payloadDocument{text: text, lines: []int{0}}
 	for from := 0; ; {
 		if ctx.Err() != nil {
-			return payloadDocument{}, false
+			return payloadDocument{}
 		}
 		end := len(text)
 		newline := strings.IndexByte(text[from:], '\n')
@@ -50,14 +49,10 @@ func indexPayloadText(ctx context.Context, text string) (payloadDocument, bool) 
 		if newline < 0 {
 			break
 		}
-		if len(d.lines) == maxPayloadLines {
-			d.text = text[:end]
-			return d, true
-		}
 		from = end + 1
 		d.lines = append(d.lines, from)
 	}
-	return d, false
+	return d
 }
 
 func graphemeWidth(g *uniseg.Graphemes) int {

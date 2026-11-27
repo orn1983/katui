@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,7 +35,7 @@ func treeContains(node *payloadNode, text string) bool {
 	if strings.Contains(node.search, text) {
 		return true
 	}
-	for _, child := range node.children {
+	for _, child := range node.childNodes() {
 		if treeContains(child, text) {
 			return true
 		}
@@ -103,19 +104,19 @@ func TestPayloadLimitsAreConfigurable(t *testing.T) {
 		if limits := o.inspectionLimits(false, false); limits != (payloadLimits{2 << 20, 8 << 20}) {
 			t.Fatalf("inline preview limits = %+v", limits)
 		}
-		if limits := o.inspectionLimits(true, true); limits != (payloadLimits{128 << 20, 128 << 20}) {
+		if limits := o.inspectionLimits(true, true); limits != (payloadLimits{math.MaxInt, math.MaxInt}) {
 			t.Fatalf("expanded fullscreen limits = %+v", limits)
 		}
 	}
-	o, err := arguments([]string{"--structured-input-mib", "6", "--rendered-output-mib", "12", "--payload-storage-mib", "0"}, io.Discard)
+	o, err := arguments([]string{"--structured-input-mib", "256", "--rendered-output-mib", "512", "--payload-storage-mib", "0"}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.inspectionLimits(true, false) != (payloadLimits{6 << 20, 12 << 20}) || !o.payloadStorageSet || o.payloadStorage != 0 {
+	if o.inspectionLimits(true, false) != (payloadLimits{256 << 20, 512 << 20}) || !o.payloadStorageSet || o.payloadStorage != 0 {
 		t.Fatalf("unexpected configured limits %+v", o)
 	}
 	for _, args := range [][]string{
-		{"--structured-input-mib", "0"}, {"--rendered-output-mib", "129"}, {"--payload-storage-mib", "-1"},
+		{"--structured-input-mib", "0"}, {"--rendered-output-mib", "9223372036854775807"}, {"--payload-storage-mib", "-1"},
 	} {
 		if _, err := arguments(args, io.Discard); err == nil {
 			t.Fatalf("accepted invalid arguments %v", args)
@@ -201,7 +202,7 @@ func TestQuotaCopyAndExport(t *testing.T) {
 func TestPayloadTextSelectsWithKeyboardAndMouse(t *testing.T) {
 	var copied string
 	view := newPayloadText(func(text string) { copied = text })
-	doc, _ := indexPayloadText(t.Context(), "abcéfg\nsecond line")
+	doc := indexPayloadText(t.Context(), "abcéfg\nsecond line")
 	view.setDocument(doc)
 	view.SetRect(0, 0, 20, 3)
 	key := func(k tcell.Key, mod tcell.ModMask) {
@@ -235,7 +236,7 @@ func TestPayloadTextSelectsWithKeyboardAndMouse(t *testing.T) {
 func TestSelectionMovesByWholeCharacters(t *testing.T) {
 	var copied string
 	view := newPayloadText(func(text string) { copied = text })
-	doc, _ := indexPayloadText(t.Context(), "e\u0301 and more text")
+	doc := indexPayloadText(t.Context(), "e\u0301 and more text")
 	view.setDocument(doc)
 	view.SetRect(0, 0, 12, 1)
 	key := view.InputHandler()
@@ -481,7 +482,7 @@ func TestPayloadTextPansWithoutChangingSelection(t *testing.T) {
 	var copied string
 	view := newPayloadText(func(text string) { copied = text })
 	content := strings.Repeat("0123456789", 40) + "\t" + strings.Repeat("字😀", 150) + "end"
-	doc, _ := indexPayloadText(t.Context(), "short\n"+content)
+	doc := indexPayloadText(t.Context(), "short\n"+content)
 	if doc.width != 1007 {
 		t.Fatalf("document is %d display columns, want 1007", doc.width)
 	}
@@ -570,4 +571,55 @@ func TestPayloadTextPansWithoutChangingSelection(t *testing.T) {
 	if point.cell != 804 || doc.text[start+point.byteOffset:start+point.byteOffset+3] != "字" {
 		t.Fatalf("mixed Unicode and tab columns were misaligned: %+v", point)
 	}
+}
+
+func TestFullTreeSearchReachesLastRecordInLargeArray(t *testing.T) {
+	const rows = 55_000
+	const finalValue = "parcel-final-destination"
+	repeated := "parcel-" + strings.Repeat("a", 51)
+	data := []byte(`[` + strings.Repeat(`"`+repeated+`",`, rows-1) + `"` + finalValue + `"]`)
+	store := newPayloadStore(t.TempDir(), payloadQuota)
+	t.Cleanup(store.close)
+	record := retainedRecord(t, store, data)
+	u, screen, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	var p *payloadPane
+	u.post(func() {
+		p = u.payloadDialog(true, []*storedRecord{record}, "tree")
+		p.search.SetText("parcel-")
+	})
+	waitUIState(t, u, 15*time.Second, "search missed entries in collapsed branches", func() bool {
+		return len(p.treeMatches) == rows && p.match == 0 && !p.result.incomplete
+	})
+	u.post(p.focusViewer)
+	clusterKey(t, screen, tcell.KeyRune, 'p', 0)
+	waitKeyboardState(t, u, "previous match did not reveal the last payload", func() bool {
+		return p.match == rows-1 && p.tree.GetCurrentNode().GetReference().(*payloadNode).value == finalValue &&
+			p.nodeView.doc.text == `"`+finalValue+`"`
+	})
+	clusterKey(t, screen, tcell.KeyRune, 'n', 0)
+	waitKeyboardState(t, u, "next match failed to wrap to the first value", func() bool {
+		return p.match == 0 && p.tree.GetCurrentNode().GetReference().(*payloadNode).value == repeated
+	})
+}
+
+func TestFullTextSearchPastFormerLineAndMatchLimits(t *testing.T) {
+	data := []byte(strings.Repeat("match\n", 10_001) + strings.Repeat("\n", 990_000) + "last-match")
+	store := newPayloadStore(t.TempDir(), payloadQuota)
+	t.Cleanup(store.close)
+	record := retainedRecord(t, store, data)
+	u, _, _ := startClusterUI(t, nil, "-b", "127.0.0.1:1")
+	var p *payloadPane
+	u.post(func() {
+		p = u.payloadDialog(true, []*storedRecord{record}, "raw")
+		p.search.SetText("MATCH")
+	})
+	waitUIState(t, u, 15*time.Second, "raw search did not include all matches", func() bool {
+		return len(p.textMatches) == 10_002
+	})
+	u.post(func() {
+		p.advance(-1)
+		if p.viewer.match != [2]int{len(data) - len("match"), len(data)} {
+			t.Errorf("last match = %v, want the final five bytes", p.viewer.match)
+		}
+	})
 }

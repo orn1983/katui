@@ -19,6 +19,7 @@ import (
 
 // Keep the encoded OSC 52 sequence below common terminal limits.
 const terminalClipboardBytes = 64 << 10
+const maxClipboardBytes = 128 << 20
 
 func deliverClipboard(ctx context.Context, text, localCommand string, terminal func([]byte) bool) (string, error) {
 	if localCommand != "" {
@@ -96,7 +97,7 @@ func (p *payloadPane) copyValue() {
 }
 
 func completeValueText(ctx context.Context, records []*storedRecord) (string, error) {
-	out := renderText{limit: maxInspectionBytes}
+	out := renderText{limit: maxClipboardBytes}
 	for i, r := range records {
 		if !r.fullAvailable() {
 			return "", fmt.Errorf("%s: %w", r.id, errPayloadQuota)
